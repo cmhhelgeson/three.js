@@ -27,7 +27,8 @@ const gpuShaderStageLib = {
 
 const supports = {
 	instance: true,
-	storageBuffer: true
+	storageBuffer: true,
+  storageReadOnlyBuffer: true,
 };
 
 const wgslFnOpLib = {
@@ -835,25 +836,19 @@ ${ flowData.code }
 				bindingSnippets.push( `@binding( ${index ++} ) @group( 0 ) var ${uniform.name} : ${textureType};` );
 
 			} else if ( uniform.type === 'buffer' || uniform.type === 'storageBuffer' ) {
-        console.log(`Uniform Type: ${uniform.type}`)
-        console.log(`Uniform Node:`);
-        console.log(uniform.node);
 
 				const bufferNode = uniform.node;
 				const bufferType = this.getType( bufferNode.bufferType );
-        console.log(bufferType);
 				const bufferCount = bufferNode.bufferCount;
 
 				const bufferCountSnippet = bufferCount > 0 ? ', ' + bufferCount : '';
 				const bufferSnippet = `\t${uniform.name} : array< ${bufferType}${bufferCountSnippet} >\n`;
-        console.log(`Buffer Snippet: ${bufferSnippet}`)
 				let bufferAccessMode = bufferNode.isStorageBufferNode ? 'storage,read' : 'uniform';
         if (!bufferNode.readOnly) {
           bufferAccessMode += '_write'
         }
 
 				bufferSnippets.push( this._getWGSLStructBinding( 'NodeBuffer_' + bufferNode.id, bufferSnippet, bufferAccessMode, index ++ ) );
-        console.log(bufferSnippets);
 			} else {
 
 				const vectorType = this.getType( this.getVectorType( uniform.type ) );
@@ -972,7 +967,6 @@ ${ flowData.code }
 		if ( this.material !== null ) {
 
 			this.vertexShader = this._getWGSLVertexCode( shadersData.vertex );
-      console.log(this.vertexShader);
 			this.fragmentShader = this._getWGSLFragmentCode( shadersData.fragment );
 
 		} else {
