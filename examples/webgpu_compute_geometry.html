@@ -71,7 +71,8 @@
 					// compute shader
 
 					const computeFn = tslFn( () => {
-
+						
+						// Within the shader, interpret the vec4 positions as an array of vec3s
 						const positionAttribute = storage( positionBaseAttribute, 'vec3', positionBaseAttribute.count );
 						const normalAttribute = storage( normalBaseAttribute, 'vec3', normalBaseAttribute.count );
 
@@ -81,8 +82,7 @@
 						const time = timerLocal( 1 );
 						const scale = 0.3;
 
-						//
-
+						// Access the positions and normals as vec3s
 						const position = vec3( positionAttribute.element( instanceIndex ) );
 						const normal = vec3( normalAttribute.element( instanceIndex ) );
 
@@ -100,6 +100,7 @@
 						const transformed = position.mul( m );
 						const transformedNormal = normal.mul( m );
 
+						// Store the positions and normals as vec4s
 						positionStorageAttribute.element( instanceIndex ).assign( transformed );
 						normalStorageAttribute.element( instanceIndex ).assign( transformedNormal );
 

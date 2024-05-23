@@ -55,7 +55,7 @@ class InstancedPointsNodeMaterial extends NodeMaterial {
 
 			// camera space
 			const mvPos = property( 'vec4', 'mvPos' );
-			mvPos.assign( modelViewMatrix.mul( vec4( instancePosition, 1.0 ) ) );
+			mvPos.assign( modelViewMatrix.mul( vec4( instancePosition.xyz, 1.0 ) ) );
 
 			const aspect = viewport.z.div( viewport.w );
 
@@ -120,7 +120,7 @@ class InstancedPointsNodeMaterial extends NodeMaterial {
 
 					const instanceColor = attribute( 'instanceColor' );
 
-					pointColorNode = instanceColor.mul( materialColor );
+					pointColorNode = instanceColor.xyz.mul( materialColor );
 
 				} else {
 
