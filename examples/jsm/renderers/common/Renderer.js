@@ -642,6 +642,12 @@ class Renderer {
 
 	}
 
+	async getTypedArrayAsync( attribute ) {
+
+		return await this.backend.getTypedArrayAsync( attribute );
+
+	}
+
 	getContext() {
 
 		return this.backend.getContext();

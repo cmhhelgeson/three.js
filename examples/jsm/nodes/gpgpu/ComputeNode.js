@@ -1,10 +1,16 @@
+import { GPUFeatureName } from '../../renderers/webgpu/utils/WebGPUConstants.js';
 import Node, { addNodeClass } from '../core/Node.js';
 import { NodeUpdateType } from '../core/constants.js';
 import { addNodeElement, nodeObject } from '../shadernode/ShaderNode.js';
 
+const ComputeEnableExtension = {
+	'chromium-experimental-subgroups': 'chromium_experimental_subgroups',
+	'shader-f16': 'f16',
+};
+
 class ComputeNode extends Node {
 
-	constructor( computeNode, count, workgroupSize = [ 64 ] ) {
+	constructor( computeNode, count, workgroupSize = [ 64 ]) {
 
 		super( 'void' );
 
@@ -16,6 +22,8 @@ class ComputeNode extends Node {
 		this.workgroupSize = workgroupSize;
 		this.dispatchCount = 0;
 
+		this.features = [];
+
 		this.version = 1;
 		this.updateBeforeType = NodeUpdateType.OBJECT;
 
@@ -23,7 +31,7 @@ class ComputeNode extends Node {
 
 	}
 
-	dispose() {
+	dispose() {+
 
 		this.dispatchEvent( { type: 'dispose' } );
 
@@ -48,6 +56,13 @@ class ComputeNode extends Node {
 
 	}
 
+	enableFeature( feature ) {
+
+		this.features.push( feature );
+		return this;
+
+	}
+
 	onInit() { }
 
 	updateBefore( { renderer } ) {
@@ -61,6 +76,22 @@ class ComputeNode extends Node {
 		const { shaderStage } = builder;
 
 		if ( shaderStage === 'compute' ) {
+
+			for ( const feature of this.features ) {
+
+				if ( feature === GPUFeatureName.ChromiumExperimentalSubGroups ) {
+
+					builder.getSubgroupSize();
+					builder.getSubgroupIndex();
+
+				}
+
+				console.log(feature)
+				const directive = ComputeEnableExtension[ feature ];
+				console.log(directive)
+				builder.getDirective( directive );
+
+			}
 
 			const snippet = this.computeNode.build( builder, 'void' );
 
@@ -78,7 +109,7 @@ class ComputeNode extends Node {
 
 export default ComputeNode;
 
-export const compute = ( node, count, workgroupSize ) => nodeObject( new ComputeNode( nodeObject( node ), count, workgroupSize ) );
+export const compute = ( node, count, workgroupSize, features ) => nodeObject( new ComputeNode( nodeObject( node ), count, workgroupSize, features ) ); 
 
 addNodeElement( 'compute', compute );
 

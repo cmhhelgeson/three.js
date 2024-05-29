@@ -29,6 +29,10 @@ class IndexNode extends Node {
 
 			propertyName = builder.getInstanceIndex();
 
+		} else if ( scope === IndexNode.SUBGROUP ) {
+
+			propertyName = builder.getSubgroupIndex();
+			
 		} else {
 
 			throw new Error( 'THREE.IndexNode: Unknown scope: ' + scope );
@@ -46,6 +50,9 @@ class IndexNode extends Node {
 			const nodeVarying = varying( this );
 
 			output = nodeVarying.build( builder, nodeType );
+			console.log(nodeVarying)
+
+			console.log(output)
 
 		}
 
@@ -57,10 +64,12 @@ class IndexNode extends Node {
 
 IndexNode.VERTEX = 'vertex';
 IndexNode.INSTANCE = 'instance';
+IndexNode.SUBGROUP = 'subgroup';
 
 export default IndexNode;
 
 export const vertexIndex = nodeImmutable( IndexNode, IndexNode.VERTEX );
 export const instanceIndex = nodeImmutable( IndexNode, IndexNode.INSTANCE );
+export const subgroupIndex = nodeImmutable( IndexNode, IndexNode.SUBGROUP );
 
 addNodeClass( 'IndexNode', IndexNode );

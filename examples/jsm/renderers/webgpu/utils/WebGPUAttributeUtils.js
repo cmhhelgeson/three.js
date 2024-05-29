@@ -213,12 +213,24 @@ class WebGPUAttributeUtils {
 
 	}
 
+	async getTypedArrayAsync( attribute ) {
+
+		const arrayBuffer = await this.getArrayBufferAsync( attribute );
+		const typedBuffer = new attribute.array.constructor( arrayBuffer );
+		return typedBuffer;
+
+	}
+
 	async getArrayBufferAsync( attribute ) {
+		
+		console.log(attribute)
 
 		const backend = this.backend;
 		const device = backend.device;
 
 		const data = backend.get( this._getBufferAttribute( attribute ) );
+		
+		console.log(data)
 
 		const bufferGPU = data.buffer;
 		const size = bufferGPU.size;
@@ -258,6 +270,8 @@ class WebGPUAttributeUtils {
 		await readBufferGPU.mapAsync( GPUMapMode.READ );
 
 		const arrayBuffer = readBufferGPU.getMappedRange();
+
+		console.log(arrayBuffer)
 
 		return arrayBuffer;
 

@@ -54,7 +54,9 @@
 
 				await renderer.computeAsync( computeNode );
 
+				console.log(waveGPUBuffer)
 				const waveArray = new Float32Array( await renderer.getArrayBufferAsync( waveGPUBuffer ) );
+				console.log(waveArray)
 
 				// play result
 

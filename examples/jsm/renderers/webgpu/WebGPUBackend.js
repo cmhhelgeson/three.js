@@ -143,6 +143,12 @@ class WebGPUBackend extends Backend {
 
 	}
 
+	async getTypedArrayAsync( attribute ) {
+		
+		return await this.attributeUtils.getTypedArrayAsync( attribute );
+		
+	}
+
 	getContext() {
 
 		return this.context;

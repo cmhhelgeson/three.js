@@ -320,5 +320,7 @@ export const GPUFeatureName = {
 	ShaderF16: 'shader-f16',
 	RG11B10UFloat: 'rg11b10ufloat-renderable',
 	BGRA8UNormStorage: 'bgra8unorm-storage',
-	Float32Filterable: 'float32-filterable'
+	Float32Filterable: 'float32-filterable',
+	ChromiumExperimentalSubGroups: 'chromium-experimental-subgroups',
 };
+

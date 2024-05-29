@@ -138,6 +138,8 @@ class WGSLNodeBuilder extends NodeBuilder {
 
 		this.builtins = {};
 
+		this.directives = {};
+
 	}
 
 	needsColorSpaceToLinear( texture ) {
@@ -529,6 +531,24 @@ ${ flowData.code }
 
 	}
 
+	getSubgroupIndex() {
+
+		return this.getBuiltin('subgroup_invocation_id', 'subgroupIndex', 'u32', 'attribute');
+
+	}
+
+	getSubgroupSize() {
+		
+		return this.getBuiltin('subgroup_size', 'subgroupSize', 'u32', 'attribute');
+
+	}
+
+	getWorkgroupId() {
+
+		return this.getBuiltin('workgroup_id', 'workgroupId', 'vec3<u32>', 'attribute');
+
+	}
+
 	getFrontFacing() {
 
 		return this.getBuiltin( 'front_facing', 'isFront', 'bool' );
@@ -550,6 +570,31 @@ ${ flowData.code }
 	isFlipY() {
 
 		return false;
+
+	}
+
+	getDirective( name, shaderStage = this.shaderStage) {
+
+		const stage = this.directives[ shaderStage ] || ( this.directives[ shaderStage ] = [] );
+		stage.push(name);
+		
+	}
+
+	getDirectives( shaderStage ) {
+		const snippets = [];
+		const directives = this.directives[ shaderStage ];
+
+		if (directives !== undefined) {
+
+			for (const directive of directives) {
+
+				snippets.push(`enable ${directive};`);
+
+			}
+
+		}
+
+		return snippets.join('\n');
 
 	}
 
@@ -843,6 +888,8 @@ ${ flowData.code }
 			stageData.structs = this.getStructs( shaderStage );
 			stageData.vars = this.getVars( shaderStage );
 			stageData.codes = this.getCodes( shaderStage );
+			stageData.directives = this.getDirectives( shaderStage ) ;
+			console.log(stageData)
 
 			//
 
@@ -919,7 +966,9 @@ ${ flowData.code }
 
 		} else {
 
+			console.log(this.object)
 			this.computeShader = this._getWGSLComputeCode( shadersData.compute, ( this.object.workgroupSize || [ 64 ] ).join( ', ' ) );
+			console.log(this.computeShader)
 
 		}
 
@@ -1042,8 +1091,12 @@ fn main( ${shaderData.varyings} ) -> ${shaderData.returnType} {
 	}
 
 	_getWGSLComputeCode( shaderData, workgroupSize ) {
+		console.log(shaderData)
 
 		return `${ this.getSignature() }
+// directives
+${ shaderData.directives }
+
 // system
 var<private> instanceIndex : u32;
 

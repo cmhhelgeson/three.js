@@ -43,11 +43,12 @@
 			import StorageBufferAttribute from 'three/addons/renderers/common/StorageBufferAttribute.js';
 			import StorageInstancedBufferAttribute from 'three/addons/renderers/common/StorageInstancedBufferAttribute.js';
 
-			import { color, InstancedPointsNodeMaterial, storage, instanceIndex, tslFn, wgslFn, vec3, vec4, vec2, abs, float, If, negate } from 'three/nodes';
+			import { color, InstancedPointsNodeMaterial, storage, instanceIndex, subgroupIndex, tslFn, wgslFn, vec3, vec4, vec2, abs, float, If, negate } from 'three/nodes';
 
 			import * as GeometryUtils from 'three/addons/utils/GeometryUtils.js';
 
 			let renderer, scene, camera, controls, backgroundNode, computeUpdate;
+			let asyncL
 			let material;
 			let stats;
 			let gui;
@@ -104,7 +105,9 @@
 				const simHeight = 40;
 
 				const simXStart = -20.0;
-				const simYStart = -20.0
+				const simYStart = -20.0;
+
+
 
 				for ( let i = 0; i < numParticles; i++ ) {
 
@@ -114,7 +117,7 @@
 					positions.push( x, y, 1.0);
 
 					pointColor.setHSL( i, 1.0, 0.5, THREE.SRGBColorSpace );
-					colors.push( pointColor.r, pointColor.g, pointColor.b );
+					colors.push( Math.random(), Math.random(), Math.random() );
 
 				}
 
@@ -184,6 +187,14 @@
 
 				const computeIntegration = computeIntegreationFn().compute(numParticles);
 				
+
+				const prefixSort = wgslFn(`
+					fn prefixSort(
+						arrayBuffer: array<f32>,
+					)
+
+
+				`)
 	
 
 				const positionFn = tslFn( () => {
