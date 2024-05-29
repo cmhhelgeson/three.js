@@ -13,8 +13,7 @@ import { NodeBuilder, CodeNode } from '../../../nodes/Nodes.js';
 import { getFormat } from '../utils/WebGPUTextureUtils.js';
 
 import WGSLNodeParser from './WGSLNodeParser.js';
-import { GPUStorageTextureAccess } from '../utils/WebGPUConstants.js';
-
+import { GPUBufferBindingType, GPUStorageTextureAccess, } from '../utils/WebGPUConstants.js';
 
 // GPUShaderStage is not defined in browsers not supporting WebGPU
 const GPUShaderStage = self.GPUShaderStage;
@@ -388,8 +387,7 @@ class WGSLNodeBuilder extends NodeBuilder {
 
 		} else {
 
-			// @TODO: Account for future read-only storage buffer pull request
-			return 'read_write';
+			return node.access === GPUBufferBindingType.Storage ? 'read_write' : 'read';
 
 		}
 
@@ -841,7 +839,7 @@ ${ flowData.code }
 
 				const bufferCountSnippet = bufferCount > 0 ? ', ' + bufferCount : '';
 				const bufferSnippet = `\t${uniform.name} : array< ${bufferType}${bufferCountSnippet} >\n`;
-				let bufferAccessMode = bufferNode.isStorageBufferNode ? `storage, ${bufferNode.access}` : 'uniform';
+				const bufferAccessMode = bufferNode.isStorageBufferNode ? `storage, ${this.getStorageAccess( bufferNode )}` : 'uniform';
 
 				bufferSnippets.push( this._getWGSLStructBinding( 'NodeBuffer_' + bufferNode.id, bufferSnippet, bufferAccessMode, index ++ ) );
 
