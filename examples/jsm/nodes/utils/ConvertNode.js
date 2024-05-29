@@ -54,6 +54,8 @@ class ConvertNode extends Node {
 
 		const snippet = node.build( builder, type );
 
+		console.log(snippet)
+
 		return builder.format( snippet, type, output );
 
 	}

@@ -228,6 +228,12 @@ class WGSLNodeBuilder extends NodeBuilder {
 
 	}
 
+	generateControlBarrier( scope ) {
+		
+		return `${scope}Barrier()`
+
+	}
+
 	isUnfilterable( texture ) {
 
 		return this.getComponentTypeFromTexture( texture ) !== 'float' || ( texture.isDataTexture === true && texture.type === FloatType );
@@ -889,7 +895,6 @@ ${ flowData.code }
 			stageData.vars = this.getVars( shaderStage );
 			stageData.codes = this.getCodes( shaderStage );
 			stageData.directives = this.getDirectives( shaderStage ) ;
-			console.log(stageData)
 
 			//
 
@@ -897,6 +902,7 @@ ${ flowData.code }
 			flow += this.flowCode[ shaderStage ];
 
 			const flowNodes = this.flowNodes[ shaderStage ];
+			console.log(this.flowNodes)
 			const mainNode = flowNodes[ flowNodes.length - 1 ];
 
 			const outputNode = mainNode.outputNode;
@@ -966,7 +972,6 @@ ${ flowData.code }
 
 		} else {
 
-			console.log(this.object)
 			this.computeShader = this._getWGSLComputeCode( shadersData.compute, ( this.object.workgroupSize || [ 64 ] ).join( ', ' ) );
 			console.log(this.computeShader)
 
@@ -1091,7 +1096,7 @@ fn main( ${shaderData.varyings} ) -> ${shaderData.returnType} {
 	}
 
 	_getWGSLComputeCode( shaderData, workgroupSize ) {
-		console.log(shaderData)
+		//console.log(shaderData)
 
 		return `${ this.getSignature() }
 // directives

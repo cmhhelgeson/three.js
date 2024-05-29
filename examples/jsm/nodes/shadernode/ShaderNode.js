@@ -6,6 +6,7 @@ import SplitNode from '../utils/SplitNode.js';
 import SetNode from '../utils/SetNode.js';
 import ConstNode from '../core/ConstNode.js';
 import { getValueFromType, getValueType } from '../core/NodeUtils.js';
+import BarrierNode from '../core/BarrierNode.js';
 
 //
 
@@ -142,6 +143,8 @@ const nodeBuilderFunctionsCacheMap = new WeakMap();
 const ShaderNodeObject = function ( obj, altType = null ) {
 
 	const type = getValueType( obj );
+	console.log(obj)
+	console.log(type)
 
 	if ( type === 'node' ) {
 
@@ -260,6 +263,8 @@ class ShaderCallNodeInternal extends Node {
 	call( builder ) {
 
 		const { shaderNode, inputNodes } = this;
+		console.log(shaderNode);
+		console.log(inputNodes);
 
 		if ( shaderNode.layout ) {
 
@@ -423,6 +428,16 @@ const safeGetNodeType = ( node ) => {
 
 };
 
+const BarrierType = function ( type ) {
+
+	return () => {
+
+		return nodeObject( new BarrierNode(type) )
+
+	}
+
+}
+
 const ConvertType = function ( type, cacheMap = null ) {
 
 	return ( ...params ) => {
@@ -542,6 +557,12 @@ export function append( node ) {
 }
 
 addNodeElement( 'append', append );
+
+export const workgroupBarrier = new BarrierType('workgroup');
+export const subgroupBarrier = new BarrierType('subgroup');
+
+addNodeElement('workgroupBarrier', workgroupBarrier);
+addNodeElement('subgroupBarrier', subgroupBarrier);
 
 // types
 // @TODO: Maybe export from ConstNode.js?
