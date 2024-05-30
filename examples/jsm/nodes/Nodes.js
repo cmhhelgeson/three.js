@@ -7,7 +7,7 @@ export * from './core/constants.js';
 // core
 export { default as AssignNode, assign } from './core/AssignNode.js';
 export { default as AttributeNode, attribute } from './core/AttributeNode.js';
-export { default as BarrierNode } from './core/BarrierNode.js';
+export { workgroupBarrier, subgroupBarrier, textureBarrier, storageBarrier } from './core/BarrierNode.js';
 export { default as BypassNode, bypass } from './core/BypassNode.js';
 export { default as CacheNode, cache } from './core/CacheNode.js';
 export { default as ConstNode } from './core/ConstNode.js';

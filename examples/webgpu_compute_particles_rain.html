@@ -24,7 +24,7 @@
 		<script type="module">
 
 			import * as THREE from 'three';
-			import { tslFn, texture, uv, uint, positionWorld, workgroupBarrier, modelWorldMatrix, cameraViewMatrix, timerLocal, timerDelta, cameraProjectionMatrix, vec2, temp, instanceIndex, subgroupIndex, subgroupSize, property, float, positionGeometry, storage, MeshBasicNodeMaterial, If } from 'three/nodes';
+			import { tslFn, texture, uv, uint, Continue, positionWorld, workgroupBarrier, modelWorldMatrix, cameraViewMatrix, timerLocal, timerDelta, cameraProjectionMatrix, vec2, temp, instanceIndex, subgroupIndex, subgroupSize, property, float, positionGeometry, storage, MeshBasicNodeMaterial, If } from 'three/nodes';
 
 			import WebGPU from 'three/addons/capabilities/WebGPU.js';
 			import WebGL from 'three/addons/capabilities/WebGL.js';
@@ -134,6 +134,8 @@
 				const randUint = () => uint( Math.random() * 0xFFFFFF );
 
 				const computeInit = tslFn( () => {
+
+					const localData = workgroupLocalArray('local_data', 'uint');
 
 					const position = positionBuffer.element( instanceIndex );
 					const velocity = velocityBuffer.element( instanceIndex );

@@ -132,6 +132,8 @@ class WGSLNodeBuilder extends NodeBuilder {
 
 	constructor( object, renderer, scene = null ) {
 
+		console.log(object)
+
 		super( object, renderer, new WGSLNodeParser(), scene );
 
 		this.uniformGroups = {};
@@ -341,6 +343,12 @@ class WGSLNodeBuilder extends NodeBuilder {
 		}
 
 		return super.getPropertyName( node );
+
+	}
+
+	getLocalBuffer( node ) {
+
+		return `var<workgroup> ${node.name} array<${this.getType(node.nodeType)}, ${node.size}>}`;
 
 	}
 
@@ -895,6 +903,11 @@ ${ flowData.code }
 			stageData.vars = this.getVars( shaderStage );
 			stageData.codes = this.getCodes( shaderStage );
 			stageData.directives = this.getDirectives( shaderStage ) ;
+			if ( shaderStage === 'compute' ) {
+
+				stageData.locals = this.getWorkgroupLocals(shaderStage);
+				
+			}
 
 			//
 
