@@ -50,9 +50,6 @@ class IndexNode extends Node {
 			const nodeVarying = varying( this );
 
 			output = nodeVarying.build( builder, nodeType );
-			console.log(nodeVarying)
-
-			console.log(output)
 
 		}
 

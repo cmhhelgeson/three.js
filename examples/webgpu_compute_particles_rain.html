@@ -24,7 +24,7 @@
 		<script type="module">
 
 			import * as THREE from 'three';
-			import { tslFn, texture, uv, uint, Continue, positionWorld, workgroupBarrier, modelWorldMatrix, cameraViewMatrix, timerLocal, timerDelta, cameraProjectionMatrix, vec2, temp, instanceIndex, subgroupIndex, subgroupSize, property, float, positionGeometry, storage, MeshBasicNodeMaterial, If } from 'three/nodes';
+			import { tslFn, texture, uv, uint, Continue, positionWorld, workgroupBarrier, storageBarrier, textureBarrier, subgroupBarrier, modelWorldMatrix, cameraViewMatrix, timerLocal, timerDelta, cameraProjectionMatrix, vec2, temp, instanceIndex, subgroupIndex, subgroupSize, property, float, positionGeometry, storage, MeshBasicNodeMaterial, If } from 'three/nodes';
 
 			import WebGPU from 'three/addons/capabilities/WebGPU.js';
 			import WebGL from 'three/addons/capabilities/WebGL.js';
@@ -135,7 +135,7 @@
 
 				const computeInit = tslFn( () => {
 
-					const localData = workgroupLocalArray('local_data', 'uint');
+					//const localData = workgroupLocalArray('local_data', 'uint');
 
 					const position = positionBuffer.element( instanceIndex );
 					const velocity = velocityBuffer.element( instanceIndex );
@@ -153,7 +153,15 @@
 
 					rippleTime.x = 1000;
 
-					workgroupBarrier();
+					If(rippleTime.x.equal(1000), () => {
+
+						const t = float(1.0)
+
+						//workgroupBarrier();
+
+					})
+
+					//workgroupBarrier();
 
 				} )().compute( maxParticleCount );
 

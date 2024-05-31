@@ -86,9 +86,7 @@ class ComputeNode extends Node {
 
 				}
 
-				console.log(feature)
 				const directive = ComputeEnableExtension[ feature ];
-				console.log(directive)
 				builder.getDirective( directive );
 
 			}

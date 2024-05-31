@@ -132,8 +132,6 @@ class WGSLNodeBuilder extends NodeBuilder {
 
 	constructor( object, renderer, scene = null ) {
 
-		console.log(object)
-
 		super( object, renderer, new WGSLNodeParser(), scene );
 
 		this.uniformGroups = {};
@@ -903,11 +901,6 @@ ${ flowData.code }
 			stageData.vars = this.getVars( shaderStage );
 			stageData.codes = this.getCodes( shaderStage );
 			stageData.directives = this.getDirectives( shaderStage ) ;
-			if ( shaderStage === 'compute' ) {
-
-				stageData.locals = this.getWorkgroupLocals(shaderStage);
-				
-			}
 
 			//
 
@@ -915,7 +908,6 @@ ${ flowData.code }
 			flow += this.flowCode[ shaderStage ];
 
 			const flowNodes = this.flowNodes[ shaderStage ];
-			console.log(this.flowNodes)
 			const mainNode = flowNodes[ flowNodes.length - 1 ];
 
 			const outputNode = mainNode.outputNode;

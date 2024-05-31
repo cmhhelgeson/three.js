@@ -222,15 +222,11 @@ class WebGPUAttributeUtils {
 	}
 
 	async getArrayBufferAsync( attribute ) {
-		
-		console.log(attribute)
 
 		const backend = this.backend;
 		const device = backend.device;
 
 		const data = backend.get( this._getBufferAttribute( attribute ) );
-		
-		console.log(data)
 
 		const bufferGPU = data.buffer;
 		const size = bufferGPU.size;
