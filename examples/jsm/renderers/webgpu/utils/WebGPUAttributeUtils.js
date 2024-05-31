@@ -259,7 +259,7 @@ class WebGPUAttributeUtils {
 
 		const arrayBuffer = readBufferGPU.getMappedRange();
 
-		return arrayBuffer;
+		return new attribute.array.constructor(arrayBuffer);
 
 	}
 
