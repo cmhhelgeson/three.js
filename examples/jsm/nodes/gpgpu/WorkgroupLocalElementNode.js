@@ -2,7 +2,7 @@ import { addNodeClass } from '../core/Node.js';
 import { nodeProxy, addNodeElement } from '../shadernode/ShaderNode.js';
 import ArrayElementNode from './ArrayElementNode.js';
 
-class StorageArrayElementNode extends ArrayElementNode {
+class WorkgroupArrayElementNode extends ArrayElementNode {
 
 	constructor( storageBufferNode, indexNode ) {
 

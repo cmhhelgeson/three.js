@@ -861,6 +861,9 @@ ${ flowData.code }
 				const vectorType = this.getType( this.getVectorType( uniform.type ) );
 				const groupName = uniform.groupNode.name;
 
+				console.log(vectorType);
+				console.log(groupName);
+
 				const group = uniformGroups[ groupName ] || ( uniformGroups[ groupName ] = {
 					index: index ++,
 					snippets: []
