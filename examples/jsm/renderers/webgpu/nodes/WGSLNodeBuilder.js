@@ -140,6 +140,8 @@ class WGSLNodeBuilder extends NodeBuilder {
 
 		this.builtins = {};
 
+		this.locals = {};
+
 	}
 
 	needsColorSpaceToLinear( texture ) {
@@ -524,6 +526,24 @@ class WGSLNodeBuilder extends NodeBuilder {
 
 	}
 
+	getLocal( name, type, size ) {
+
+		const map = this.locals[ shaderStage ] || ( this.locals[ shaderStage ] = new Map() );
+
+		if ( map.has( name ) === false ) {
+
+			map.set( name, {
+				name,
+				type,
+				size
+			} );
+
+		}
+
+		return name;
+
+	}
+
 	getVertexIndex() {
 
 		if ( this.shaderStage === 'vertex' ) {
@@ -597,6 +617,25 @@ ${ flowData.code }
 	isFlipY() {
 
 		return false;
+
+	}
+
+	getLocals( shaderStage ) {
+
+		const snippets = [];
+		const locals = this.locals[ shaderStage ];
+
+		if ( locals !== undefined ) {
+
+			for ( const { name, type, size } of locals.values() ) {
+
+				snippets.push( `var<workgroup> ${name} array<${type}, ${size}>` );
+
+			}
+
+		}
+
+		return snippets.join( ';\n');
 
 	}
 
@@ -904,6 +943,7 @@ ${ flowData.code }
 			stageData.structs = this.getStructs( shaderStage );
 			stageData.vars = this.getVars( shaderStage );
 			stageData.codes = this.getCodes( shaderStage );
+			stageData.locals = this.getLocals( shaderStage );
 
 			//
 
@@ -1107,6 +1147,9 @@ fn main( ${shaderData.varyings} ) -> ${shaderData.returnType} {
 		return `${ this.getSignature() }
 // system
 var<private> instanceIndex : u32;
+
+// locals
+${shaderData.locals}
 
 // uniforms
 ${shaderData.uniforms}
