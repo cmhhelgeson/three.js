@@ -1,0 +1,361 @@
+<html lang="en">
+	<head>
+		<title>three.js - shadertoy</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link type="text/css" rel="stylesheet" href="main.css">
+	</head>
+	<body>
+
+		<div id="info">
+			<a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> - WebGPU Compute Bitonic Sort
+			<br />Adapted from <a href="https://webgpu.github.io/webgpu-samples/?sample=bitonicSort" target="_blank" rel="noopener"> WebGPU Samples</a> and <a href="https://poniesandlight.co.uk/reflect/bitonic_merge_sort/" target="_blank" rel="noopener"> Ponies & Light</a>
+		</div>
+		<div id="container">
+			<canvas id="c"></canvas>
+		</div>
+
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../build/three.module.js",
+					"three/addons/": "./jsm/",
+					"three/nodes": "./jsm/nodes/Nodes.js"
+				}
+			}
+		</script>
+
+		<script type="module">
+			import * as THREE from 'three';
+			import WebGPU from 'three/addons/capabilities/WebGPU.js';
+			import WebGL from 'three/addons/capabilities/WebGL.js';
+
+			import WebGPURenderer from 'three/addons/renderers/webgpu/WebGPURenderer.js';
+			import { tslFn, uint, workgroupId, uvec3, localId, instanceIndex, uvec2, vec4, storage, code, storageReadOnly, attribute, varyingProperty, timerLocal, uniform, wgslFn, texture, uv, clamp, float, vec2, vec3, fract, floor, MeshBasicNodeMaterial, positionGeometry, sin } from 'three/nodes';
+
+			import StorageBufferAttribute from 'three/addons/renderers/common/StorageBufferAttribute.js';
+
+			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+
+			let renderer, camera, scene;
+			const dpr = window.devicePixelRatio;
+
+			const crtWidthUniform = uniform( 1608 );
+			const crtHeightUniform = uniform( 1608 );
+
+			const canvas = document.getElementById( 'c' );
+
+			function onWindowResize() {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				renderer.render( scene, camera );
+
+			}
+
+			/*function animate() {
+
+				renderer.render( scene, camera );
+				//renderer.compute()
+
+			} */
+
+			function init() {
+
+				if ( WebGPU.isAvailable() === false && WebGL.isWebGL2Available() === false ) {
+
+					document.body.appendChild( WebGPU.getErrorMessage() );
+
+					throw new Error( 'No WebGPU or WebGL2 support' );
+
+				}
+
+				const StepType = {
+					NONE: 0,
+					FLIP_LOCAL: 1,
+					DISPERSE_LOCAL: 2,
+					FLIP_GLOBAL: 3,
+					DISPERSE_GLOBAL: 4,
+				}
+
+				const numElements = 1024;
+				const gridWidthUniform = uniform(32);
+				const gridHeightUniform = uniform(32);
+				const algoUniform = uniform(StepType.FLIP_LOCAL);
+				const blockHeightUniform = uniform(2)
+				const vUv = varyingProperty( 'vec2', 'vUv' );
+
+				const elements = new Uint32Array(
+      		Array.from({ length: numElements }, (_, i) => i)
+    		);
+
+				const randomizeElementArray = () => {
+      		let currentIndex = elements.length;
+      		// While there are elements to shuffle
+      		while (currentIndex !== 0) {
+        		// Pick a remaining element
+        		const randomIndex = Math.floor(Math.random() * currentIndex);
+        		currentIndex -= 1;
+        		[elements[currentIndex], elements[randomIndex]] = [
+          		elements[randomIndex],
+          		elements[currentIndex],
+        		];
+      		}
+    		};
+
+				randomizeElementArray();
+
+				const constructBufferName = ( id, idx ) => `NodeBuffer_${id}.nodeUniform${idx}`;
+
+				const bufferNames = {}
+
+				// Input buffer
+				const inputBufferAttribute = new StorageBufferAttribute(elements, 1);
+				const inputStorage = storageReadOnly(inputBufferAttribute, 'uint', inputBufferAttribute.count);
+
+				// Output buffers
+				const outputBufferAttribute = new StorageBufferAttribute(elements.length, 1);
+				const outputStorage = storage(outputBufferAttribute, 'uint', outputBufferAttribute.count);
+
+				// Buffer names since we can't pass storage buffers as mutable arguments to functions
+				bufferNames[ 'input' ] = constructBufferName( inputStorage.id, 0 );
+				bufferNames[ 'output' ] = constructBufferName( outputStorage.id, 1 );
+
+				const vertexShader = tslFn( () => {
+
+					vUv.assign( uv() );
+					return positionGeometry;
+
+				} );
+
+				const fragmentShader = tslFn(() => {
+
+					const dimensions = vec2(
+						float(gridWidthUniform),
+						float(gridHeightUniform)
+					)
+
+					const uv = vUv.mul(dimensions);
+					const pixel = uvec2(
+						uint(floor(uv.x)),
+						uint(floor(uv.y))
+					)
+
+					const rowIndex = uint(gridWidthUniform).mul(pixel.y);
+					const elementIndex = rowIndex.add(pixel.x);
+					const colorChanger = inputStorage.element(elementIndex);
+					const subtractor = float(colorChanger).div(gridWidthUniform.mul(gridHeightUniform));
+					
+					const color = vec3(float(1.0).sub(subtractor))
+
+					return color;
+
+				} );
+
+				const createWorkgroupArray = ( type, size ) => {
+
+					return code( `var<workgroup> localData: array<${type}, ${size}>;`);
+
+				}
+
+				const getFlipIndices = code( `
+					fn get_flip_indices(invoke_id: u32, block_height: u32) -> vec2u {
+  					// Caculate index offset (i.e move indices into correct block)
+  					let block_offset: u32 = ((2 * invoke_id) / block_height) * block_height;
+  					let half_height = block_height / 2;
+  					// Calculate index spacing
+  					var idx: vec2u = vec2u(
+    					invoke_id % half_height, block_height - (invoke_id % half_height) - 1,
+  					);
+  					idx.x += block_offset;
+  					idx.y += block_offset;
+  					return idx;
+					}
+				` );
+
+
+				const getDisperseIndices = code( `
+					fn get_disperse_indices(invoke_id: u32, block_height: u32) -> vec2u {
+  					var block_offset: u32 = ((2 * invoke_id) / block_height) * block_height;
+  					let half_height = block_height / 2;
+						var idx: vec2u = vec2u(
+    					invoke_id % half_height, (invoke_id % half_height) + half_height
+  					);
+  					idx.x += block_offset;
+  					idx.y += block_offset;
+  					return idx;
+					}
+				` );
+
+				const localCompareAndSwap = code(`
+					fn local_compare_and_swap(
+						idx_before: u32, idx_after: u32) {
+  					//idx_before should always be < idx_after
+  					if (localData[idx_after] < localData[idx_before]) {
+    					var temp: u32 = localData[idx_before];
+    					localData[idx_before] = localData[idx_after];
+    					localData[idx_after] = temp;
+  					}
+  					return;
+					}
+				` );
+
+				const workgroupSize = 64;
+
+
+				// Access input and Access Output are not used. They are provided as arguments as a hack to 
+				// get access to the storage buffers when the wgsl is constructed.
+				const sortWGSL = wgslFn( `
+					fn bitonicSort(
+						workgroupId: vec3<u32>,
+						localId: vec3<u32>,
+						globalId: u32,
+						accessInput: array<u32, 1024>,
+						accessOutput: array<u32, 1024>,
+						width: f32,
+						height: f32,
+						algo: u32,
+						blockHeight: u32,
+					) -> {
+
+						let offset = ${workgroupSize} * 2 * workgroupId.x;
+
+  					// If we will perform a local swap, then populate the local data
+  					if (algo <= 2) {
+
+    					// Assign range of inputData to localData.
+    					// Range cannot exceed maxWorkgroupsX * 2
+    					// Each invocation will populate the workgroup data... (1 invocation for every 2 elements)
+   		 				localData[localId.x * 2] = ${bufferNames['input']}[offset + localId.x * 2];
+    					localData[localId.x * 2 + 1] = ${bufferNames['input']}[offset + localId.x * 2 + 1];
+
+  					}
+
+  					//...and wait for each other to finish their own bit of data population.
+  					workgroupBarrier();
+
+  					switch algo {
+
+    					case 1: { // Local Flip
+
+      					let idx = get_flip_indices(localId.x, blockHeight);
+      					local_compare_and_swap(idx.x, idx.y);
+
+    					} 
+
+    					case 2: { // Local Disperse
+
+      					let idx = get_disperse_indices(localId.x, blockHeight);
+      					local_compare_and_swap(idx.x, idx.y);
+
+    					} 
+
+    					case 3: { // Global Flip
+
+      					let idx = get_flip_indices(globalId, blockHeight);
+
+								// Global Compare and Swap
+      					if (${bufferNames['input']}[idx.y] < ${bufferNames['input']}[idx.x]) {
+    							${bufferNames['output']}[idx.x] = ${bufferNames['input']}[idx.y];
+    							${bufferNames['output']}[idx.y] = ${bufferNames['input']}[idx.x];
+								}
+
+    					}
+							
+    					case 4: { 
+
+      					let idx = get_disperse_indices(globalId, blockHeight);
+
+								// Global Compare and Swap
+      					if (${bufferNames['input']}[idx.y] < ${bufferNames['input']}[idx.x]) {
+
+    							${bufferNames['output']}[idx.x] = ${bufferNames['input']}[idx.y];
+    							${bufferNames['output']}[idx.y] = ${bufferNames['input']}[idx.x];
+
+								}
+    					}
+
+    					default: { 
+      
+    					}
+
+  					}	
+
+  					// Ensure that all invocations have swapped their own regions of data
+  					workgroupBarrier();
+
+  					if (algo <= 2) {
+
+    					//Repopulate global data with local data
+    					${bufferNames['output']}[offset + localId.x * 2] = localData[localId.x * 2];
+    					${bufferNames['output']}[offset + localId.x * 2 + 1] = localData[localId.x * 2 + 1];
+
+  					}
+
+					}
+				`, [
+					createWorkgroupArray('u32', workgroupSize * 2), 
+					getFlipIndices,
+					getDisperseIndices,
+					localCompareAndSwap
+				] );
+
+				const computeSortNode = sortWGSL( { 
+					workgroupId: workgroupId,
+					localId: localId,
+					globalId: instanceIndex,
+					accessInput: inputStorage,
+					accessOutput: outputStorage, 
+					width: gridWidthUniform,
+					height: gridHeightUniform,
+					algo: algoUniform,
+					blockHeight: blockHeightUniform
+				}).compute( numElements );
+				
+
+				const material = new MeshBasicNodeMaterial();
+				material.positionNode = vertexShader();
+				material.colorNode = fragmentShader();
+
+				camera = new THREE.OrthographicCamera( - 1, 1, 1, - 1, 0, 1 );
+				scene = new THREE.Scene();
+
+				const geometry = new THREE.PlaneGeometry( 2, 2 );
+
+				const quad = new THREE.Mesh( geometry, material );
+				scene.add( quad );
+
+				renderer = new WebGPURenderer( { antialias: true, canvas: canvas } );
+				renderer.setPixelRatio( dpr );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				//renderer.setAnimationLoop( animate );
+				renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+				document.body.appendChild( renderer.domElement );
+
+				window.addEventListener( 'resize', onWindowResize );
+
+				renderer.info.autoReset = false;
+
+				const sortStepAnimation = async () => {
+
+					renderer.info.reset();
+
+					await renderer.computeAsync( computeSortNode );
+					await renderer.renderAsync( scene, camera );
+
+					setTimeout( sortStepAnimation, 1000 );
+
+				}
+
+				sortStepAnimation();
+
+				const gui = new GUI();
+
+			}
+
+			init();
+
+		</script>
+	</body>
+</html>

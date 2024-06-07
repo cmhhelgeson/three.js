@@ -10,6 +10,8 @@ class StorageBufferNode extends BufferNode {
 
 	constructor( value, bufferType, bufferCount = 0 ) {
 
+		console.log(bufferCount)
+
 		super( value, bufferType, bufferCount );
 
 		this.isStorageBufferNode = true;

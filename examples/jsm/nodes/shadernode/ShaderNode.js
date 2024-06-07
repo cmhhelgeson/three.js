@@ -266,6 +266,7 @@ class ShaderCallNodeInternal extends Node {
 	call( builder ) {
 
 		const { shaderNode, inputNodes } = this;
+		console.log(shaderNode)
 
 		if ( shaderNode.layout ) {
 

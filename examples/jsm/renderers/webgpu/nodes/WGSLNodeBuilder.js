@@ -322,7 +322,6 @@ class WGSLNodeBuilder extends NodeBuilder {
 				return name;
 
 			} else if ( type === 'buffer' || type === 'storageBuffer' || type === 'storageReadOnlyBuffer' ) {
-
 				return `NodeBuffer_${ node.id }.${name}`;
 
 			} else {
@@ -599,6 +598,32 @@ ${ flowData.code }
 
 	}
 
+	getLocalId() {
+
+		return this.getBuiltin( 'local_invocation_id', 'localId', 'vec3<u32>', 'attribute' );
+
+	}
+
+	getWorkgroupId() {
+
+		return this.getBuiltin( 'workgroup_id', 'workgroupId', 'vec3<u32>', 'attribute' );
+
+	}
+
+	getNumWorkgroups() {
+
+		return this.getBuiltin( 'num_workgroups', 'numWorkgroups', 'vec3<u32>', 'attribute' );
+
+	}
+
+	getSubgroupSize() {
+
+		return this.getBuiltin( 'subgroup_size', 'subgroupSize', 'u32', 'attribute' );
+
+	}
+
+
+
 	getBuiltins( shaderStage ) {
 
 		const snippets = [];
@@ -847,13 +872,14 @@ ${ flowData.code }
 			} else if ( uniform.type === 'buffer' || uniform.type === 'storageBuffer' || uniform.type === 'storageReadOnlyBuffer' ) {
 
 				const bufferNode = uniform.node;
+				console.log(bufferNode)
 				const bufferType = this.getType( bufferNode.bufferType );
 				const bufferCount = bufferNode.bufferCount;
 
 				const bufferCountSnippet = bufferCount > 0 ? ', ' + bufferCount : '';
 				const bufferSnippet = `\t${uniform.name} : array< ${bufferType}${bufferCountSnippet} >\n`;
 				const bufferAccessMode = bufferNode.isStorageBufferNode ? `storage, ${this.getStorageAccess( bufferNode )}` : 'uniform';
-
+				
 				bufferSnippets.push( this._getWGSLStructBinding( 'NodeBuffer_' + bufferNode.id, bufferSnippet, bufferAccessMode, index ++ ) );
 
 			} else {
@@ -975,10 +1001,12 @@ ${ flowData.code }
 
 			this.vertexShader = this._getWGSLVertexCode( shadersData.vertex );
 			this.fragmentShader = this._getWGSLFragmentCode( shadersData.fragment );
+			console.log(this.fragmentShader)
 
 		} else {
 
 			this.computeShader = this._getWGSLComputeCode( shadersData.compute, ( this.object.workgroupSize || [ 64 ] ).join( ', ' ) );
+			console.log(this.computeShader)
 
 		}
 

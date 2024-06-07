@@ -146,6 +146,7 @@ export { default as RangeNode, range } from './geometry/RangeNode.js';
 
 // gpgpu
 export { default as ComputeNode, compute } from './gpgpu/ComputeNode.js';
+export { default as ComputeBuiltinNode, localId, workgroupId, numWorkgroups, subgroupSize } from './gpgpu/ComputeBuiltinNode.js';
 
 // lighting
 export { default as LightNode, lightTargetDirection } from './lighting/LightNode.js';

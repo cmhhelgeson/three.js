@@ -119,6 +119,7 @@ const nativeFn = ( code, includes = [], language = '' ) => {
 
 	const fn = ( ...params ) => functionNode.call( ...params );
 	fn.functionNode = functionNode;
+	console.log(functionNode)
 
 	return fn;
 
