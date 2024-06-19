@@ -1,0 +1,322 @@
+<html lang="en">
+	<head>
+		<title>three.js - WebGPU - Fluid Tunnel</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link type="text/css" rel="stylesheet" href="main.css">
+	</head>
+	<body>
+
+		<div id="info">
+			<a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> WebGPU - Fluid Tunnel
+		</div>
+
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../build/three.module.js",
+					"three/addons/": "./jsm/",
+					"three/nodes": "./jsm/nodes/Nodes.js"
+				}
+			}
+		</script>
+
+		<script type="module">
+
+			import * as THREE from 'three';
+			import { vec2, vec3, vec4, floor, uv, tslFn, storageTexture, MeshBasicNodeMaterial, negate, storage, storageReadOnly, wgslFn, code, instanceIndex, uniform, Return } from 'three/nodes';
+
+			import WebGPU from 'three/addons/capabilities/WebGPU.js';
+			import WebGPURenderer from 'three/addons/renderers/webgpu/WebGPURenderer.js';
+			import StorageTexture from 'three/addons/renderers/common/StorageTexture.js';
+			import StorageBufferAttribute from 'three/addons/renderers/common/StorageBufferAttribute.js';
+
+			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+
+			let camera, scene, renderer;
+			let computeInitNode, computeToPing, computeToPong;
+			let pingTexture, pongTexture;
+			let material;
+			let phase = true;
+			let lastUpdate = - 1;
+			let storageFragmentShader, textureFragmentShader;
+			// Step 1. Apply gravity to velocity x, y (u, v);
+			let computeIntegration;
+			// Step 2. Make the velocity of each cell incompressible
+			let computeIncompressibility;
+			// Step 3. Extrapolate velocities of buffer cells from divergence velocities.
+			let computeExtrapolation;
+			// Step 4. Advection
+			let computeAdvection;
+
+			const computeMethods = {
+				'Storage Texture': 'storageTexture',
+				'Storage Buffer': 'storageBuffer',
+			}
+
+			init();
+
+			function init() {
+
+				if ( WebGPU.isAvailable() === false ) {
+
+					document.body.appendChild( WebGPU.getErrorMessage() );
+
+					throw new Error( 'No WebGPU support' );
+
+				}
+
+				
+				const simDimension = 10;
+				const numSimCells = simDimension * simDimension;
+
+				const bufferDimension = simDimension + 2;
+				const numBufferCells = bufferDimension * bufferDimension;
+
+				// Since we are not executing the algorithm serially,
+				// we need to create staging buffers for each step.
+				// This way, we can read from the output of the previous step,
+				// instead of modifying the same velocity buffer as it is being read.
+
+				// @TODO: Create swapping mechanism rather than creating buffer for each step
+				// Velocity x (or u) located at center of left side of grid cell
+				const velXStartBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
+				const velXIntegrationBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
+				const velXDivergenceBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
+				const velXAdvectionBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
+				// Velocity y (or v) located at center of bottom side of grid cell
+				const velYStartBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
+				const velYIntegrationBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
+				const velYDivergenceBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
+				const velYAdvectionBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
+
+				const pressureBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
+				const dBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
+				const scalarBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
+
+				const overRelaxationUniform = uniform(1.9);
+				const cpUniform = uniform(1000)
+				const densityUniform = uniform(1000);
+
+				const deltaTimeUniform = uniform( 1 / 120.0 );
+				const gravityUniform = uniform( -9.81 );
+
+				const createReadStorage = ( attribute ) => storageReadOnly( attribute , 'uint', 1 );
+				// Technically read-write storage
+				const createWriteStorage = ( attribute ) => storage( attribute, 'uint', 1 );
+
+				computeIntegration = tslFn(() => {
+
+					// Create shader storage buffers
+					const velYReadBuffer = createReadStorage(velYStartBufferAttribute);
+					const velYWriteBuffer = createWriteStorage(velYIntegrationBufferAttribute);
+
+					// 2D index of sim grid cell
+					const simGridX = floor(instanceIndex.div(simDimension));  // i / simDimension
+					const simGridY = instanceIndex.mod(simDimension);         // i % simDimesnions
+
+					// 2D index of sim grid cell in buffered grid.
+					const bufferGridX = simGridX + 1;
+					const bufferGridY = simGridY + 1;
+
+					// Convert to 1D index into buffered grid for storage buffer access
+					const cellIndex = bufferGridY.add(bufferGridX.mul(bufferDimension));
+
+					// Gravity only operates on y
+					const velY = velYReadBuffer.element(cellIndex);
+					velYWriteBuffer.element(cellIndex).addAssign(gravityUniform.mul(deltaTimeUniform));
+
+				})().compute(numSimCells);
+
+				computeIncompressibility = tslFn(() => {
+					
+					// Create shader storage buffers
+					const velXRead = createReadStorage( velXIntegrationBufferAttribute );
+					const velYRead = createReadStorage( velYIntegrationBufferAttribute );
+
+					const velXWrite = createWriteStorage( velYDivergenceBufferAttribute );
+					const velYWrite = createWriteStorage( velYDivergenceBufferAttribute );
+
+					const pressureWrite = createWriteStorage( pressureBufferAttribute );
+					const scalarRead = createReadStorage( scalarBufferAttribute );
+
+					// 2D index of sim grid cell
+					const simGridX = floor(instanceIndex.div(simDimension));  // i / numCols
+					const simGridY = instanceIndex.mod(simDimension);         // i % numCols
+
+					// 2D index of sim grid cell in buffered grid.
+					const bufferGridX = simGridX + 1;
+					const bufferGridY = simGridY + 1;
+
+					// Convert to 1D index into buffered grid for storage buffer access
+					const cellIndex = bufferGridY.add(bufferGridX.mul(bufferDimension));
+					
+					// No need for boundary checks since our cellIndex is buffered
+					const cellLeftIndex = cellIndex.sub(1);
+					const cellRightIndex = cellIndex.add(1);
+					const cellAboveIndex = cellIndex.add(bufferDimension);
+					const cellBelowIndex = cellIndex.sub(bufferDimension);
+
+					// Get scalar values of surrounding cells
+					const cellLeftScalar = scalarRead.element(cellLeftIndex);
+					const cellRightScalar = scalarRead.element(cellRightIndex);
+					const cellAboveScalar = scalarRead.element(cellAboveIndex);
+					const cellBelowScalar = scalarRead.element(cellBelowIndex);
+
+					const cellScalar = cellLeftScalar.add(cellRightScalar).add(cellAboveScalar).add(cellBelowScalar);
+
+					If(cellScalar.equal(0.0), () => {
+						Return();
+					});
+
+					// Subtract inflow of current cell from inflow of adjacent cells to get the outflow.
+					// Current cell inflow represents negative outflow from current cell.
+					// Adjacent cell inflow represents positive outflow from current cell.
+					const currentCellInflow = velXRead.element(cellIndex).add(velYRead.element(cellIndex));
+					const adjacentCellInflow = velXRead.element(cellRightIndex).add(velYRead.element(cellAboveIndex));
+					const outflow = adjacentCellInflow.sub(currentCellInflow);
+
+					let pressure = negate(outflow).div(scalar);
+					pressure.mulAssign(overRelaxationUniform);
+					
+					pressureWrite.element(cellIndex).addAssign(pressure);
+
+					// Apply scalars to cell velocities
+					// Velocity X
+					velXWrite.element(cellIndex).subAssign(cellLeftScalar.mul(pressure));
+					velXWrite.element(cellRightIndex).addAssign(cellRightScalar.mul(pressure));
+					// Velocity Y
+					velYWrite.element(cellIndex).subAssign(cellBelowScalar.mul(pressure));
+					velXWrite.element(cellRightIndex).addAssign(cellRightScalar.mul(pressure));
+
+				})().compute(numSimCells);
+
+				// Extrapolate velocity of cells in the buffered grid from surrounding cells in the simulation grid.
+				// Effectively a post-processing part of the divergence/outflow/incompressibility step.
+				// Shader is a bit of hack, making use of the fact that our grid dimensions are always square.
+				computeExtrapolation = tslFn(() => {
+					const velXReadWrite = storage(velXDivergenceBufferAttribute, 'uint', 1);
+					const velYReadWrite = storage(velYDivergenceBufferAttribute, 'uint', 1);
+
+					const startAllignment = uint(bufferDimension);
+					const lastAllignment = uint(bufferDimension - 1);
+
+					// Buffer cell to left of first simulation column
+					const cellLeftBufferIndex = instanceIndex.mul(startAllignment);
+					// Buffer cell to right of last simulation column
+					const cellRightBufferIndex = cellLeftBufferIndex.add(lastAllignment);
+					// Buffer cell below first simulation row
+					const cellBottomBufferIndex = instanceIndex;
+					// Buffer cell above last simulation row
+					const cellTopBufferIndex = lastAllignment.mul(bufferDimension).add(instanceIndex);
+
+					// Apply horizontal velocity of simulation cells to left and right buffer cells
+					const leftBufferVelocity = velXReadWrite.element(cellLeftBufferIndex);
+					leftBufferVelocity.assign(velXReadWrite.element(cellLeftBufferIndex.add(1)));
+
+					const rightBufferVelocity = velXReadWrite.element(cellRightBufferIndex);
+					rightBufferVelocity.assign(velXReadWrite.element(cellRightBufferIndex.sub(1)));
+
+					// Apply vertical velocity of simulation cells to top and bottom buffer cells
+					const bottomBufferVelocity = velYReadWrite.element(cellBottomBufferIndex);
+					bottomBufferVelocity.assign(velYReadWrite.element(cellBottomBufferIndex.add(1)));
+
+					const topBufferVelocity = velYReadWrite.element(cellTopBufferIndex);
+					topBufferVelocity.assign(velYReadWrite.element(cellTopBufferIndex.sub(1)));
+				})().compute(bufferDimension);
+
+
+				computeAdvection = tslFn(() => {
+
+					
+
+
+
+				})
+
+
+				const storageFragmentShader = tslFn(() => {
+
+					return vec3(1.0, 0.0, 1.0);
+
+				});
+
+				const textureFragmentShader = tslFn(() => {
+
+					return vec3(0.0, 1.0, 0.0);
+
+				});
+
+				camera = new THREE.OrthographicCamera( - 1, 1, 1, - 1, 0, 1 );
+				scene = new THREE.Scene();
+
+				const geometry = new THREE.PlaneGeometry( 2, 2 );
+
+				const simWithStorageQuad = new THREE.Mesh( geometry, new MeshBasicNodeMaterial({
+					colorNode: storageFragmentShader(),
+				}));
+				scene.add( simWithStorageQuad );
+
+				const simWithTextureQuad = new THREE.Mesh( geometry, new MeshBasicNodeMaterial({
+					colorNode: textureFragmentShader(),
+				}));
+				scene.add( simWithTextureQuad );
+				simWithTextureQuad.visible = false;
+
+				renderer = new WebGPURenderer( { antialias: true } );
+				renderer.setPixelRatio( window.devicePixelRatio );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				renderer.setAnimationLoop( animate );
+				document.body.appendChild( renderer.domElement );
+
+				window.addEventListener( 'resize', onWindowResize );
+
+				const params = {
+					method: 'storageBuffer'
+				};
+
+				const gui = new GUI();
+
+				gui.add(params, 'method', computeMethods).onChange(() => {
+					console.log(params.method)
+
+					if (params.method === 'storageBuffer') {
+
+						simWithTextureQuad.visible = false;
+						simWithStorageQuad.visible = true;
+
+					}
+
+					if (params.method === 'storageTexture') {
+						
+						simWithStorageQuad.visible = false;
+						simWithTextureQuad.visible = true;
+
+					}
+
+				})
+				//renderer.computeAsync( computeInitNode );
+
+			}
+
+			function onWindowResize() {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+			}
+
+			function animate() {
+
+				//renderer.compute(computeVelocity);
+				//renderer.compute(computeDivergence)
+				// renderer.compute(computeAdvection);
+
+				renderer.render( scene, camera );
+
+			}
+
+		</script>
+	</body>
+</html>
