@@ -24,7 +24,7 @@
 		<script type="module">
 
 			import * as THREE from 'three';
-			import { vec2, vec3, vec4, floor, uv, tslFn, storageTexture, MeshBasicNodeMaterial, negate, storage, storageReadOnly, wgslFn, code, instanceIndex, uniform, Return } from 'three/nodes';
+			import { vec2, vec3, vec4, floor, uv, remainder, tslFn, storageTexture, MeshBasicNodeMaterial, temp, negate, storage, storageReadOnly, wgslFn, code, instanceIndex, uniform, Return } from 'three/nodes';
 
 			import WebGPU from 'three/addons/capabilities/WebGPU.js';
 			import WebGPURenderer from 'three/addons/renderers/webgpu/WebGPURenderer.js';
@@ -101,29 +101,53 @@
 				const deltaTimeUniform = uniform( 1 / 120.0 );
 				const gravityUniform = uniform( -9.81 );
 
-				const createReadStorage = ( attribute ) => storageReadOnly( attribute , 'uint', 1 );
+				const createReadStorage = ( attribute ) => storageReadOnly( attribute , 'uint', numBufferCells);
 				// Technically read-write storage
-				const createWriteStorage = ( attribute ) => storage( attribute, 'uint', 1 );
+				const createWriteStorage = ( attribute ) => storage( attribute, 'uint', numBufferCells );
+
+				const createDivergenceShader = (xOffset, yOffset) => tslFn(() => {
+					
+					const velYReadBuffer = createReadStorage(velYStartBufferAttribute);
+					const velYWriteBuffer = createWriteStorage(velYDivergenceBufferAttribute)
+					
+				})
 
 				computeIntegration = tslFn(() => {
 
 					// Create shader storage buffers
 					const velYReadBuffer = createReadStorage(velYStartBufferAttribute);
 					const velYWriteBuffer = createWriteStorage(velYIntegrationBufferAttribute);
+					const velXReadBuffer = createReadStorage(velXStartBufferAttribute);
 
 					// 2D index of sim grid cell
-					const simGridX = floor(instanceIndex.div(simDimension));  // i / simDimension
-					const simGridY = instanceIndex.mod(simDimension);         // i % simDimesnions
+					const simGridX = temp(
+						instanceIndex.div(simDimension),
+						'simGridX'
+					);
+					const simGridY = temp(
+						instanceIndex.remainder(simDimension),
+						'simGridY'
+					);
 
 					// 2D index of sim grid cell in buffered grid.
-					const bufferGridX = simGridX + 1;
-					const bufferGridY = simGridY + 1;
+					// temp makes compute code easier to parse
+					const bufferGridX = temp(
+						simGridX.add(1),
+						'bufferGridX'
+					);
+					const bufferGridY = temp(
+						simGridY.add(1),
+						'bufferGridY'
+					);
 
 					// Convert to 1D index into buffered grid for storage buffer access
-					const cellIndex = bufferGridY.add(bufferGridX.mul(bufferDimension));
+					const cellIndex = temp(
+						bufferGridY.add(bufferGridX.mul(bufferDimension)),
+						'cellIndex',
+					);
 
 					// Gravity only operates on y
-					const velY = velYReadBuffer.element(cellIndex);
+					const velY = velXReadBuffer.element(cellIndex);
 					velYWriteBuffer.element(cellIndex).addAssign(gravityUniform.mul(deltaTimeUniform));
 
 				})().compute(numSimCells);
@@ -141,8 +165,8 @@
 					const scalarRead = createReadStorage( scalarBufferAttribute );
 
 					// 2D index of sim grid cell
-					const simGridX = floor(instanceIndex.div(simDimension));  // i / numCols
-					const simGridY = instanceIndex.mod(simDimension);         // i % numCols
+					const simGridX = instanceIndex.div(simDimension);  // i / numCols
+					const simGridY = instanceIndex.remainder(simDimension);         // i % numCols
 
 					// 2D index of sim grid cell in buffered grid.
 					const bufferGridX = simGridX + 1;
@@ -234,12 +258,14 @@
 
 				})
 
+				const createFragmentShader = (r, g, b) => tslFn(() => {
 
-				const storageFragmentShader = tslFn(() => {
+					return vec3(r, g, b);
 
-					return vec3(1.0, 0.0, 1.0);
+				})
 
-				});
+
+				const storageFragmentShader = createFragmentShader(1.0, 0.0, 0.0);
 
 				const textureFragmentShader = tslFn(() => {
 
@@ -309,7 +335,7 @@
 
 			function animate() {
 
-				//renderer.compute(computeVelocity);
+				renderer.compute(computeIntegration);
 				//renderer.compute(computeDivergence)
 				// renderer.compute(computeAdvection);
 
