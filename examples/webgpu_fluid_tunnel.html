@@ -52,6 +52,8 @@
 			let computeExtrapolateX, computeExtrapolateY;
 			// Step 4. Advection
 			let computeAdvection;
+			// Step 5. Smoek
+			let computeSmoke;
 
 			const computeMethods = {
 				'Storage Texture': 'storageTexture',
@@ -394,7 +396,10 @@
 
 				} 
 
-				renderer.compute(computeDiv_I0J0);
+				// renderer.compute(computeExtrapolateX)
+				// renderer.compute(computeExtrapolateY)
+				// renderer.compute(computeAdvection)
+				// renderer.compute(computeSmoke)
 
 				renderer.render( scene, camera );
 
