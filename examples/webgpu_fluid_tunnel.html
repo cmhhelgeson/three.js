@@ -28,7 +28,7 @@
 		<script type="module">
 
 			import * as THREE from 'three';
-			import { vec2, vec3, vec4, floor, uv, remainder, If, tslFn, storageTexture, expression, MeshBasicNodeMaterial, temp, negate, storage, storageReadOnly, wgslFn, code, instanceIndex, uniform, Return } from 'three/nodes';
+			import { vec2, vec3, vec4, float, timerLocal, positionGeometry, varying, varyingProperty, floor, uv, remainder, If, tslFn, storageTexture, expression, MeshBasicNodeMaterial, temp, negate, storage, storageReadOnly, wgslFn, code, instanceIndex, uniform, Return, texture } from 'three/nodes';
 
 			import WebGPU from 'three/addons/capabilities/WebGPU.js';
 			import WebGPURenderer from 'three/addons/renderers/webgpu/WebGPURenderer.js';
@@ -37,13 +37,14 @@
 
 			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
 
-			let camera, scene, renderer;
+			let camera, sceneDivergencePlayground, sceneWindTunnel, renderer;
 			let computeInitNode, computeToPing, computeToPong;
 			let pingTexture, pongTexture;
 			let material;
 			let phase = true;
 			let lastUpdate = - 1;
 			let storageFragmentShader, textureFragmentShader;
+
 			// Step 1. Apply gravity to velocity x, y (u, v);
 			let computeIntegration;
 			// Step 2. Compute divergence, make velocity of each cell incomrpessible
@@ -52,7 +53,7 @@
 			let computeExtrapolateX, computeExtrapolateY;
 			// Step 4. Advection
 			let computeAdvection;
-			// Step 5. Smoek
+			// Step 5. Smoke
 			let computeSmoke;
 
 			const computeMethods = {
@@ -60,9 +61,102 @@
 				'Storage Buffer': 'storageBuffer',
 			}
 
+			const SCENE_DIVERGENCE_PLAYGROUND = 0;
+			const SCENE_WIND_TUNNEL = 1;
+
+			let currentSceneIndex = 0;
+
 			const canvas = document.getElementById('c');
 
-			init();
+			// Uniform across all scenes
+			let simHeight, cScale, simWidth, domainHeight, domainWidth, res;
+
+			const createTSLColorOutput = (r, g, b) => tslFn(() => {
+
+					return vec3(r, g, b);
+
+			})
+
+			const getSimGridDimensions = (h) => {
+
+				const simCols = Math.floor(domainWidth / h);
+				const simRows = Math.floor(domainHeight / h);
+				console.log(`simCols: ${simCols}, simRows: ${simRows}`);
+				const numSimCells = simCols * simRows;
+
+				return {
+					simCols,
+					simRows,
+					numSimCells
+				};
+
+			}
+
+			const getBufferGridDimensions = ( simCols, simRows, cellBuffer ) => {
+
+				const buffer = cellBuffer * 2;
+				const bufferCols = simCols + buffer;
+				const bufferRows = simRows + buffer;
+				console.log(`bufferCols: ${bufferCols}, bufferRows: ${bufferRows}`);
+				const numBufferCells = bufferCols * bufferRows;
+
+				return {bufferCols, bufferRows, numBufferCells};
+
+			}
+
+			const setupSceneDivergencePlayground = () => {
+
+				const res = 10;
+				const h = domainHeight / res;
+				const {simCols, simRows, numSimCells} = getSimGridDimensions(h);
+				const {bufferCols, bufferRows, numBufferCells} = getBufferGridDimensions(simCols, simRows, 1);
+				const velXBufferAttribute = new StorageBufferAttribute(numBufferCells, 1);
+				const velYBufferAttribute = new StorageBufferAttribute(numBufferCells, 1);
+
+				sceneDivergencePlayground = new THREE.Scene();
+
+				const quadWidth = 2 / simCols;
+				const quadHeight = 2 / simRows;
+
+				const geometry = new THREE.PlaneGeometry(quadWidth, quadHeight);
+				const vInstance = varyingProperty('uint', 'vInstance')
+				const instancedPositionNode = tslFn(() => {
+					vInstance.assign(instanceIndex)
+					return positionGeometry;
+				})
+
+				const textureLoader = new THREE.TextureLoader()
+				const waterTexture = textureLoader.load('textures/water/WaterTexture.png');
+				waterTexture.wrapS = THREE.RepeatWrapping;
+				waterTexture.wrapT = THREE.RepeatWrapping;
+				
+				const instancedColorNode = tslFn(() => {
+					const samplePoint = temp(uv(), 'samplePoint');
+					const time = timerLocal();
+					samplePoint.x = samplePoint.x.add(time.mul(vInstance));
+					const textureColor = texture(waterTexture, samplePoint);
+					const testColor = float(1.0).sub(float(vInstance).div(100));
+					return textureColor;
+				})
+				const instancedMeshMaterial = new MeshBasicNodeMaterial();
+				instancedMeshMaterial.positionNode = instancedPositionNode();
+				instancedMeshMaterial.colorNode = instancedColorNode();
+				const instancedMesh = new THREE.InstancedMesh(geometry, instancedMeshMaterial, simRows * simCols);
+
+				const dummy = new THREE.Object3D();
+				for (let i = 0; i < simRows; i++) {
+					for (let j = 0; j < simCols; j++) {
+						dummy.position.x = (j * quadWidth) - 1 + quadWidth / 2;
+						dummy.position.y = (i * quadHeight) - 1 + quadHeight / 2;
+						dummy.position.z = 0;
+						dummy.updateMatrix();
+						instancedMesh.setMatrixAt(i * simCols + j, dummy.matrix);
+					}
+				}
+
+				sceneDivergencePlayground.add(instancedMesh)
+
+			}
 
 			function init() {
 
@@ -73,33 +167,31 @@
 					throw new Error( 'No WebGPU support' );
 
 				}
+				
 
 				// Create renderer
 				renderer = new WebGPURenderer( { antialias: true, canvas: canvas} );
 				renderer.setPixelRatio( window.devicePixelRatio );
 				renderer.setSize( window.innerWidth, window.innerHeight );
-				renderer.setAnimationLoop( animate );
 				document.body.appendChild( renderer.domElement );
 				window.addEventListener( 'resize', onWindowResize );
 
-				// Get domain information (making everything 1 to 1 for simplicity)
-				const simHeight = 1.0;
-				const cScale = canvas.height / simHeight;
-				const simWidth = canvas.width / cScale;
+				simHeight = 1.0
+				cScale = canvas.height / simHeight;
+				simWidth = canvas.width / cScale;
+				domainHeight = 1.0;
+				domainWidth = domainHeight / simHeight * simWidth;
 				const res = 100;
-				const domainHeight = 1.0;
-				const domainWidth = domainHeight / simHeight * simWidth;
 				const h = domainHeight / res;
 
-				const simCols = Math.floor(domainWidth / h);
-				const simRows = Math.floor(domainHeight / h);
-				console.log(`simCols: ${simCols}, simRows: ${simRows}`);
-				const numSimCells = simCols * simRows;
+				setupSceneDivergencePlayground();
 
-				const bufferCols = simCols + 2;
-				const bufferRows = simRows + 2;
-				console.log(`bufferCols: ${bufferCols}, bufferRows: ${bufferRows}`);
-				const numBufferCells = bufferCols * bufferRows;
+				// For now try to use same camera for each scene
+				camera = new THREE.OrthographicCamera( - 1, 1, 1, - 1, 0, 1 );
+
+
+				const {simCols, simRows, numSimCells} = getSimGridDimensions(h);
+				const {bufferCols, bufferRows, numBufferCells} = getBufferGridDimensions(simCols, simRows, 1);
 
 				// Velocity x (or u) located at center of left side of grid cell
 				const velXStartBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
@@ -314,14 +406,8 @@
 
 				})
 
-				const createFragmentShader = (r, g, b) => tslFn(() => {
 
-					return vec3(r, g, b);
-
-				})
-
-
-				const storageFragmentShader = createFragmentShader(1.0, 0.0, 0.0);
+				const storageFragmentShader = createTSLColorOutput(1.0, 0.0, 0.0);
 
 				const textureFragmentShader = tslFn(() => {
 
@@ -330,19 +416,19 @@
 				});
 
 				camera = new THREE.OrthographicCamera( - 1, 1, 1, - 1, 0, 1 );
-				scene = new THREE.Scene();
+				sceneWindTunnel = new THREE.Scene();
 
 				const geometry = new THREE.PlaneGeometry( 2, 2 );
 
 				const simWithStorageQuad = new THREE.Mesh( geometry, new MeshBasicNodeMaterial({
 					colorNode: storageFragmentShader(),
 				}));
-				scene.add( simWithStorageQuad );
+				sceneWindTunnel.add( simWithStorageQuad );
 
 				const simWithTextureQuad = new THREE.Mesh( geometry, new MeshBasicNodeMaterial({
 					colorNode: textureFragmentShader(),
 				}));
-				scene.add( simWithTextureQuad );
+				sceneWindTunnel.add( simWithTextureQuad );
 				simWithTextureQuad.visible = false;
 
 				const params = {
@@ -369,7 +455,8 @@
 					}
 
 				})
-				//renderer.computeAsync( computeInitNode );
+
+				renderer.setAnimationLoop( animate );
 
 			}
 
@@ -383,27 +470,37 @@
 
 			function animate() {
 
-				renderer.compute(computeIntegration);
+				if (currentSceneIndex === 0) {
 
-				// Not aware of good mechanism to update uniforms in between compute passes,
-				// So for now, we just execute four separate shaders
-				for (let i = 0; i < 1; i++) {
+					renderer.render(sceneDivergencePlayground, camera)
 
-					renderer.compute(computeDiv_I0J0);
-					renderer.compute(computeDiv_I0J1);
-					renderer.compute(computeDiv_I1J0);
-					renderer.compute(computeDiv_I1J1);
+				} else {
 
-				} 
+					renderer.compute(computeIntegration);
 
-				// renderer.compute(computeExtrapolateX)
-				// renderer.compute(computeExtrapolateY)
-				// renderer.compute(computeAdvection)
-				// renderer.compute(computeSmoke)
+					// Not aware of good mechanism to update uniforms in between compute passes,
+					// So for now, we just execute four separate shaders
+					for (let i = 0; i < 1; i++) {
 
-				renderer.render( scene, camera );
+						renderer.compute(computeDiv_I0J0);
+						renderer.compute(computeDiv_I0J1);
+						renderer.compute(computeDiv_I1J0);
+						renderer.compute(computeDiv_I1J1);
+
+					} 
+
+					// renderer.compute(computeExtrapolateX)
+					// renderer.compute(computeExtrapolateY)
+					// renderer.compute(computeAdvection)
+					// renderer.compute(computeSmoke)
+
+					renderer.render( sceneWindTunnel, camera );
+
+				}
 
 			}
+
+			init();
 
 		</script>
 	</body>
