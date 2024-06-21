@@ -110,8 +110,15 @@
 				const h = domainHeight / res;
 				const {simCols, simRows, numSimCells} = getSimGridDimensions(h);
 				const {bufferCols, bufferRows, numBufferCells} = getBufferGridDimensions(simCols, simRows, 1);
-				const velXBufferAttribute = new StorageBufferAttribute(numBufferCells, 1);
-				const velYBufferAttribute = new StorageBufferAttribute(numBufferCells, 1);
+				const velXBufferAttribute = new StorageBufferAttribute(numSimCells, 1);
+				const velYBufferAttribute = new StorageBufferAttribute(numSimCells, 1);
+				console.log(velXBufferAttribute)
+				
+				for (let i = 0; i < numSimCells; i++) {
+					velXBufferAttribute.array[i] = Math.random();
+					velYBufferAttribute.array[i] = Math.random();
+				}
+				
 
 				sceneDivergencePlayground = new THREE.Scene();
 
@@ -131,9 +138,14 @@
 				waterTexture.wrapT = THREE.RepeatWrapping;
 				
 				const instancedColorNode = tslFn(() => {
+					const velXRead = storageReadOnly(velXBufferAttribute, 'float', numSimCells);
+					const velYRead = storageReadOnly(velYBufferAttribute, 'float', numSimCells);
+
 					const samplePoint = temp(uv(), 'samplePoint');
 					const time = timerLocal();
-					samplePoint.x = samplePoint.x.add(time.mul(vInstance));
+					samplePoint.x = samplePoint.x.add(velXRead.element(vInstance));
+					samplePoint.y = samplePoint.y.add(velYRead.element(vInstance));
+					
 					const textureColor = texture(waterTexture, samplePoint);
 					const testColor = float(1.0).sub(float(vInstance).div(100));
 					return textureColor;
