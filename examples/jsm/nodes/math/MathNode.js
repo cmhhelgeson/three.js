@@ -173,7 +173,14 @@ class MathNode extends TempNode {
 
 				params.push( a.build( builder, inputType ) );
 				if ( b !== null ) params.push( b.build( builder, inputType ) );
-				if ( c !== null ) params.push( c.build( builder, inputType ) );
+				if ( c !== null ) params.push( c.build( builder, 'bool' ) );
+
+				if (method === MathNode.SELECT) {
+					console.log(a);
+					console.log(b);
+					console.log(c);
+					console.log(params)
+				}
 
 			}
 
@@ -261,6 +268,7 @@ MathNode.CLAMP = 'clamp';
 MathNode.REFRACT = 'refract';
 MathNode.SMOOTHSTEP = 'smoothstep';
 MathNode.FACEFORWARD = 'faceforward';
+MathNode.SELECT = 'select'
 
 export default MathNode;
 
@@ -271,6 +279,7 @@ export const PI2 = float( Math.PI * 2 );
 
 export const all = nodeProxy( MathNode, MathNode.ALL );
 export const any = nodeProxy( MathNode, MathNode.ANY );
+export const select = nodeProxy( MathNode, MathNode.SELECT);
 export const equals = nodeProxy( MathNode, MathNode.EQUALS );
 
 export const radians = nodeProxy( MathNode, MathNode.RADIANS );
@@ -335,6 +344,7 @@ export const smoothstepElement = ( x, low, high ) => smoothstep( low, high, x );
 
 addNodeElement( 'all', all );
 addNodeElement( 'any', any );
+addNodeElement( 'select', select)
 addNodeElement( 'equals', equals );
 
 addNodeElement( 'radians', radians );

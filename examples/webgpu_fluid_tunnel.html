@@ -28,7 +28,7 @@
 		<script type="module">
 
 			import * as THREE from 'three';
-			import { vec2, vec3, vec4, float, timerLocal, positionGeometry, varying, varyingProperty, floor, uv, remainder, If, tslFn, storageTexture, expression, MeshBasicNodeMaterial, temp, negate, storage, storageReadOnly, wgslFn, code, instanceIndex, uniform, Return, texture } from 'three/nodes';
+			import { vec2, vec3, vec4, length, float, timerLocal, select, positionGeometry, varying, varyingProperty, floor, uv, remainder, If, tslFn, storageTexture, expression, MeshBasicNodeMaterial, temp, negate, storage, storageReadOnly, wgslFn, code, instanceIndex, uniform, Return, texture, fract } from 'three/nodes';
 
 			import WebGPU from 'three/addons/capabilities/WebGPU.js';
 			import WebGPURenderer from 'three/addons/renderers/webgpu/WebGPURenderer.js';
@@ -114,13 +114,13 @@
 				const h = domainHeight / res;
 				const {simCols, simRows, numSimCells} = getSimGridDimensions(h);
 				const {bufferCols, bufferRows, numBufferCells} = getBufferGridDimensions(simCols, simRows, 1);
-				const velXBufferAttribute = new StorageBufferAttribute(numSimCells, 1);
-				const velYBufferAttribute = new StorageBufferAttribute(numSimCells, 1);
+				const velXBufferAttribute = new StorageBufferAttribute(numBufferCells, 1);
+				const velYBufferAttribute = new StorageBufferAttribute(numBufferCells, 1);
 				console.log(velXBufferAttribute)
 				
-				for (let i = 0; i < numSimCells; i++) {
-					velXBufferAttribute.array[i] = Math.floor(Math.random() * 3);
-					velYBufferAttribute.array[i] = Math.floor(Math.random() * 3);
+				for (let i = 0; i < numBufferCells; i++) {
+					velXBufferAttribute.array[i] = Math.random() * 3;
+					velYBufferAttribute.array[i] = Math.random() * 3;
 				}
 
 				console.log(velXBufferAttribute);
@@ -131,10 +131,10 @@
 				const quadWidth = 2 / simCols;
 				const quadHeight = 2 / simRows;
 
-				const geometry = new THREE.PlaneGeometry(quadWidth, quadHeight);
+				//const geometry = new THREE.PlaneGeometry(quadWidth, quadHeight);
+				const geometry = new THREE.PlaneGeometry(2, 2);
 				const vInstance = varyingProperty('uint', 'vInstance')
 				const instancedPositionNode = tslFn(() => {
-					vInstance.assign(instanceIndex)
 					return positionGeometry;
 				})
 
@@ -155,70 +155,57 @@
 					const testColor = float(1.0).sub(float(vInstance).div(100));
 					return textureColor;
 				})
+
+				const sdfCircle = (
+					pointNode,
+					radius
+				) => {
+					const l = length(pointNode).sub(radius);
+					return l;
+				}
+
+				const divergenceFragmentNode = tslFn(() => {
+					const velXRead = storageReadOnly( velXBufferAttribute, 'float', numBufferCells );
+					const velYRead = storageReadOnly( velYBufferAttribute, 'float', numBufferCells );
+
+					const uvCell = temp( uv().mul( vec2( simCols, simRows ) ), 'uvCell' );
+					const simGrid2DIndex = temp( floor( uvCell ), 'simGrid2DIndex' );
+					const bufferGrid2DIndex = temp( simGrid2DIndex.add( 1 ), 'bufferGrid2DIndex' );
+					
+
+					const cellIndex = temp( bufferGrid2DIndex.x.add( bufferGrid2DIndex.y.mul( bufferCols ) ), 'cellIndex' );
+					const samplePoint = temp(
+						vec2(
+							uvCell.x.add( timerLocal().mul( velXRead.element( cellIndex ) ) ),
+							uvCell.y.add( timerLocal().mul( velYRead.element( cellIndex ) ) )
+						),
+						'samplePoint'
+					);
+
+					const d = sdfCircle(samplePoint, 0.5);
+					const check = temp(d.lessThan(0.0), 'check');
+					const textureColor = temp(
+						texture(waterTexture, samplePoint),
+						'textureColor'
+					);
+					const otherColor = temp(
+						vec4(0.0, d, 0.0, 1.0),
+						'otherColor'
+					)
+
+					const test = select(textureColor, otherColor, check)
+
+						
+					
+
+					return test;
+				})
 				const instancedMeshMaterial = new MeshBasicNodeMaterial();
 				instancedMeshMaterial.positionNode = instancedPositionNode();
-				instancedMeshMaterial.colorNode = instancedColorNode();
-				const instancedMesh = new THREE.InstancedMesh(geometry, instancedMeshMaterial, simRows * simCols);
+				instancedMeshMaterial.colorNode = divergenceFragmentNode();
+				const mesh = new THREE.Mesh(geometry, instancedMeshMaterial);
+				sceneDivergencePlayground.add(mesh)
 
-				for (let i = 0; i < simRows; i++) {
-					for (let j = 0; j < simCols; j++) {
-						dummy.position.x = (j * quadWidth) - 1 + quadWidth / 2;
-						dummy.position.y = (i * quadHeight) - 1 + quadHeight / 2;
-						dummy.position.z = 0;
-						dummy.updateMatrix();
-						instancedMesh.setMatrixAt(i * simCols + j, dummy.matrix);
-					}
-				}
-
-				sceneDivergencePlayground.add(instancedMesh)
-
-				function onMouseMoveDivergencePlayground(event) {
-					mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-        	mouse.y = - (event.clientY / window.innerHeight) * 2 + 1;
-
-        	// Update the raycaster with the camera and mouse position
-        	raycaster.setFromCamera(mouse, camera);
-
-					const instanceIds = [];
-
-					const intersects = raycaster.intersectObject(instancedMesh);
-
-					if (intersects.length > 0) {
-
-						const instanceId = intersects[0].instanceId;
-						console.log(instanceId)
-
-						if (highlightedInstanceId !== instanceId) {
-
-							instancedMesh.getMatrixAt(highlightedInstanceId, dummy.matrix);
-							dummy.scale.set(1, 1, 1);
-							dummy.updateMatrix();
-							instancedMesh.setMatrixAt(highlightedInstanceId, dummy.matrix);
-
-						}
-
-						instancedMesh.getMatrixAt(instanceId, dummy.matrix);
-						dummy.scale.set(20, 20, 20);
-						dummy.updateMatrix();
-						instancedMesh.setMatrixAt(instanceId, dummy.matrix);
-						highlightedInstanceId = instanceId;
-
-					} else if (highlightedInstanceId !== null) {
-
-						instancedMesh.getMatrixAt(highlightedInstanceId, dummy.matrix);
-						dummy.scale.set(1, 1, 1);
-						dummy.updateMatrix();
-						instancedMesh.setMatrixAt(highlightedInstanceId, dummy.matrix);
-
-						highlightedInstanceId = null;
-
-					}
-
-					instancedMesh.instanceMatrix.needsUpdate = true;
-
-				}
-
-				window.addEventListener('mousemove', onMouseMoveDivergencePlayground);
 
 			}
 
