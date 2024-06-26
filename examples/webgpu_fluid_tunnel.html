@@ -28,7 +28,7 @@
 		<script type="module">
 
 			import * as THREE from 'three';
-			import { vec2, vec3, vec4, sqrt, sign, radians, cos, sin, clamp, length, abs, min, max, float, timerLocal, cond, positionGeometry, varying, varyingProperty, floor, uv, remainder, If, tslFn, storageTexture, expression, MeshBasicNodeMaterial, temp, negate, storage, storageReadOnly, wgslFn, code, instanceIndex, uniform, Return, texture, fract } from 'three/nodes';
+			import { vec2, vec3, vec4, sqrt, sign, radians, atan2, cos, sin, clamp, length, abs, min, max, float, timerLocal, cond, positionGeometry, varying, varyingProperty, floor, uv, remainder, If, tslFn, storageTexture, expression, MeshBasicNodeMaterial, temp, negate, storage, storageReadOnly, wgslFn, code, instanceIndex, uniform, Return, texture, fract } from 'three/nodes';
 
 			import WebGPU from 'three/addons/capabilities/WebGPU.js';
 			import WebGPURenderer from 'three/addons/renderers/webgpu/WebGPURenderer.js';
@@ -223,10 +223,15 @@
 					const bufferGrid2DIndex = temp( simGrid2DIndex.add( 1 ), 'bufferGrid2DIndex' );
 					
 					const cellIndex = temp( bufferGrid2DIndex.x.add( bufferGrid2DIndex.y.mul( bufferCols ) ), 'cellIndex' );
+
+					const velX = velXRead.element(cellIndex);
+					const velY = velYRead.element(cellIndex);
+
+
 					const samplePoint = temp(
 						vec2(
-							fract(uvGrid.x.add( timerLocal().mul( velXRead.element( cellIndex ) ) )),
-							fract(uvGrid.y.add( timerLocal().mul( velYRead.element( cellIndex ) ) ))
+							fract(uvGrid.x.add( timerLocal().mul( velX ) )),
+							fract(uvGrid.y.add( timerLocal().mul( velY ) ))
 						),
 						'samplePoint'
 					);
@@ -235,8 +240,10 @@
 					const uvCell = fract(uvGrid);
 					// Get -1 to 1 uv coordinates of each cell
 					const uvCellNDC = uvCell.mul(2.0).sub(1.0);
+					// Add angle in radians between x-axis and velocity vector
+					const angle = atan2(velY, velX)
 					// Set base rotation to allign with x axis
-					const angle = radians(-90.0).add(timerLocal());
+					angle.subAssign(radians(-90.0))
 					// Rotate uv coordinates by angle determined by velocity. 
 					const uvCellNDCRotated = rotateUV(uvCellNDC, angle);
 					// For some reason uvCellNDCRotated only works for box when it's written inline
