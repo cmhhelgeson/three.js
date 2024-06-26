@@ -29,7 +29,7 @@
 
 			import * as THREE from 'three';
 			// In TSL, unless directly operating on a node, nearly every function you deploy needs to be imported from Nodes.js
-			import { vec2, vec3, vec4, sqrt, sign, mix, smoothstep, radians, atan2, cos, sin, clamp, length, abs, min, max, float, timerLocal, cond, positionGeometry, varying, varyingProperty, floor, uv, remainder, If, tslFn, storageTexture, expression, MeshBasicNodeMaterial, temp, negate, storage, storageReadOnly, wgslFn, code, instanceIndex, uniform, Return, texture, fract } from 'three/nodes';
+			import { vec2, vec3, vec4, sqrt, sign, mix, smoothstep, step, radians, atan2, cos, sin, clamp, length, abs, min, max, float, timerLocal, cond, positionGeometry, varying, varyingProperty, floor, uv, remainder, If, tslFn, storageTexture, expression, MeshBasicNodeMaterial, temp, negate, storage, storageReadOnly, wgslFn, code, instanceIndex, uniform, Return, texture, fract } from 'three/nodes';
 			import WebGPU from 'three/addons/capabilities/WebGPU.js';
 			import WebGPURenderer from 'three/addons/renderers/webgpu/WebGPURenderer.js';
 			import StorageTexture from 'three/addons/renderers/common/StorageTexture.js';
@@ -56,6 +56,7 @@
 
 			// Scene 0 Specific Constants
 			const outflowIndicatorMaxRadius = 0.5;
+			const maximumVelocity = 4.0;
 
 			// Define the compute shaders that will perform our per-frame fluid simulation
 			// Step 1. Apply gravity to velocity x, y (u, v);
@@ -105,7 +106,6 @@
 				const simGridY = Math.floor(index / simCols);
 				const bufferGridX = simGridX + 1;
 				const bufferGridY = simGridY + 1;
-				console.log(simGridX, simGridY, bufferGridX, bufferGridY, bufferGridY * bufferCols)
 				return bufferGridY * bufferCols + bufferGridX;
 
 			}
@@ -179,38 +179,41 @@
 
 				const res = 10;
 				const h = domainHeight / res;
-				const {simCols, simRows, numSimCells} = getSimGridDimensions(h);
-				const {bufferCols, bufferRows, numBufferCells} = getBufferGridDimensions(simCols, simRows, 1);
-				const velXBufferAttribute = new StorageBufferAttribute(numBufferCells, 1);
-				const velYBufferAttribute = new StorageBufferAttribute(numBufferCells, 1);
-				const divergenceBufferAttribute = new StorageBufferAttribute(numBufferCells, 1);
+				const { simCols, simRows, numSimCells } = getSimGridDimensions( h );
+				const { bufferCols, bufferRows, numBufferCells } = getBufferGridDimensions(simCols, simRows, 1);
+				const velXBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
+				const velYBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
+				const outflowBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
 				
 				// Randomize velocity values
 				for (let i = 0; i < numSimCells; i++) {
-					const cellIndex = getCellIndexFromInstanceIndex(i, simCols, bufferCols);
-					velXBufferAttribute.array[cellIndex] = Math.random() * 4 - 2;
-					velYBufferAttribute.array[cellIndex] = Math.random() * 4 - 2;
+
+					const cellIndex = getCellIndexFromInstanceIndex( i, simCols, bufferCols );
+					velXBufferAttribute.array[cellIndex] = Math.random() * (maximumVelocity * 2) - maximumVelocity;
+					velYBufferAttribute.array[cellIndex] = Math.random() * (maximumVelocity * 2) - maximumVelocity;
+
 				}
 
 				// Calculate current divergence/outflow based on randomized velocity values
 				for (let i = 0; i < numSimCells; i++) {
 
-					const cellIndex = getCellIndexFromInstanceIndex(i, simCols, bufferCols);
+					const cellIndex = getCellIndexFromInstanceIndex( i, simCols, bufferCols );
 					const lIndex = cellIndex - 1;
 					const rIndex = cellIndex + 1;
 					const uIndex = cellIndex + bufferCols;
 					const bIndex = cellIndex - bufferCols;
 
-					const inflowIntoCell = velXBufferAttribute.array[i] + velYBufferAttribute.array[i];
+					const inflowIntoCell = velXBufferAttribute.array[cellIndex] + velYBufferAttribute.array[cellIndex];
+					console.log(inflowIntoCell)
 					const outflowOutOfCell = velXBufferAttribute.array[rIndex] + velYBufferAttribute.array[uIndex];
 
-					divergenceBufferAttribute.array[cellIndex] = outflowOutOfCell - inflowIntoCell;
+					outflowBufferAttribute.array[cellIndex] = outflowOutOfCell - inflowIntoCell;
 
 				}
 
 				console.log(velXBufferAttribute.array);
 				console.log(velYBufferAttribute.array);
-				console.log(divergenceBufferAttribute.array)
+				console.log(outflowBufferAttribute.array)
 				
 				sceneDivergencePlayground = new THREE.Scene();
 
@@ -228,11 +231,13 @@
 				// Create color constants
 				const white = vec4(1.0, 1.0, 1.0, 1.0);
 				const green = vec4(0.0, 1.0, 0.0, 1.0);
+				const black = vec4(0.0, 0.0, 0.0, 1.0);
 				
 				const divergenceFragmentNode = tslFn(() => {
 
 					const velXRead = storageReadOnly( velXBufferAttribute, 'float', numBufferCells );
 					const velYRead = storageReadOnly( velYBufferAttribute, 'float', numBufferCells );
+					const outflowRead = storageReadOnly( outflowBufferAttribute, 'float', numBufferCells );
 					const uvGrid = temp( uv().mul( vec2( simCols, simRows ) ), 'uvGrid' );
 					// 2D Coordinate in Simulation Grid
 					const simGrid2DIndex = temp( floor( uvGrid ), 'simGrid2DIndex' );
@@ -241,8 +246,9 @@
 					// 1D Coordinate in Buffer Grid
 					const cellIndex = temp( bufferGrid2DIndex.x.add( bufferGrid2DIndex.y.mul( bufferCols ) ), 'cellIndex' );
 				
-					const velX = velXRead.element(cellIndex);
-					const velY = velYRead.element(cellIndex);
+					const velX = velXRead.element( cellIndex );
+					const velY = velYRead.element( cellIndex );
+					const outflow = outflowRead.element( cellIndex );
 
 					const samplePoint = temp(
 						vec2(
@@ -268,22 +274,31 @@
 					// Combine box and triangle into arrow
 					const arrowSDF = min(boxSDF, triangleSDF);
 					const arrowCheck = temp(arrowSDF.lessThan(0.0), 'check');
-					const circleSDF = min(sdfCircleTSL(uvCellNDC, outflowIndicatorMaxRadius), 0.01);
+
+					// Apply circle SDF with radius defined by the outflow
+					// Put outflow in range of -1 to 1. The maximum outflow is maxVelocityX + maxVelocityY. The minimumn outflow is the inverse of the maximumn (i.e everything flowing in or everything flowing out)
+					const normalizedOutflow = outflow.div(maximumVelocity * 2);
+					const circleRadius = float(outflowIndicatorMaxRadius).mul(abs(normalizedOutflow));
+
+
+
+
+					const circleSDF = min(sdfCircleTSL(uvCellNDC, circleRadius), 0.01);
 					const circleCheck = circleSDF.greaterThan(0.0);
 					const textureColor = temp(
 						texture(waterTexture, samplePoint),
 						'textureColor'
 					);
 
-					const alpha = clamp(float(10.0).mul(float(1.0).sub(circleSDF)), 0.0, 1.0);
-					const testGreen = vec4(0.0, 1.0, 0.0, alpha);
-					const premultipliedGreen = vec4(green.rgb.mul(green.a), green.a);
+
+					// When outflow is positive, show green, else show black.
+					const circleColor = normalizedOutflow.lessThan(0.0).cond(black, green);
 
 
 					// Apply outflow indicator to color (green for outflow/production, black for inflow/destruction)
-					textureColor.x.assign(circleCheck.cond(textureColor.x, 0.0));
-					textureColor.y.assign(circleCheck.cond(textureColor.y, green.y));
-					textureColor.z.assign(circleCheck.cond(textureColor.z, 0.0));
+					textureColor.x.assign(circleCheck.cond(textureColor.x, circleColor.x));
+					textureColor.y.assign(circleCheck.cond(textureColor.y, circleColor.y));
+					textureColor.z.assign(circleCheck.cond(textureColor.z, circleColor.z));
 
 					// Apply Arrow SDF to color
 					textureColor.addAssign(white.mul(arrowCheck));
