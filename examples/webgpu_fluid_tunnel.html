@@ -36,9 +36,13 @@
 			import StorageBufferAttribute from 'three/addons/renderers/common/StorageBufferAttribute.js';
 			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
 
-			// Define general Three.js objects
+			// Define objects shared across scenes
 			// Same orthographic camera and WebGPU renderer used across both scenes.
 			let camera, renderer;
+			// Uniforms
+			let simColsUniform, simRowsUniform, bufferColsUniform, bufferRowsUniform;
+			// Shared scene info
+			let sceneDivergenceInfo, sceneWindTunnelInfo;
 
 			// Scene 0: View divergence adjustment in isolation
 			// Scene 1: Wind tunnel fluid simulation.
@@ -84,8 +88,7 @@
 				const simCols = Math.floor( domainWidth / h );
 				const simRows = Math.floor( domainHeight / h );
 				console.log(`simCols: ${simCols}, simRows: ${simRows}`);
-				const numSimCells = simCols * simRows;
-				return { simCols, simRows, numSimCells };
+				return { simCols, simRows };
 
 			}
 
@@ -120,6 +123,35 @@
 				const bufferGridRow = temp(simGridRow.add(1), 'bufferGridY');
 				// Convert to 1D index into buffered grid for storage buffer access
 				return temp(bufferGridCol.add(bufferGridRow.mul(bufferCols)), 'cellIndex');
+
+			}
+
+			// Compute utility functions
+			const calculateCellOutflow = (
+				velXArray,
+				velYArray,
+				cellIndex,
+				bufferCols,
+			) => {
+
+				return (velXArray[cellIndex + 1] + velYArray[cellIndex + bufferCols]) - (velXArray[cellIndex] + velYArray[cellIndex]);
+
+			}
+			
+			const calculateCellOutflowTSL = (
+				velXReadNode,
+				velYReadNode,
+				cellIndexNode, 
+				rIndexNode,
+				uIndexNode
+			) => {
+
+				// Current cell inflow represents negative outflow from current cell.
+				const inflowIntoCell = velXReadNode.element(cellIndexNode).add(velYReadNode.element(cellIndexNode));
+				// Adjacent cell inflow represents positive outflow from current cell.
+				const outflowFromCell = velXRead.element(rIndex).add(velYRead.element(uIndex));
+				// Subtract outflow by inflow
+				return outflowFromCell.sub(inflowIntoCell);
 
 			}
 
@@ -175,11 +207,27 @@
 
 			})
 
+			const switchScene = (index) => {
+				let sceneInfo;
+				if (index === 0) {
+					sceneInfo = sceneDivergenceInfo;
+				} else {
+					sceneInfo = sceneWindTunnelInfo
+				}
+
+				simColsUniform = sceneInfo.simCols;
+				simRowsUniform = sceneInfo.simRows;
+				bufferColsUniform = sceneInfo.bufferCols;
+				bufferRowsUniform = sceneInfo.bufferRows;
+
+			}
+
 			const setupSceneDivergencePlayground = () => {
 
 				const res = 10;
 				const h = domainHeight / res;
-				const { simCols, simRows, numSimCells } = getSimGridDimensions( h );
+				const { simCols, simRows } = getSimGridDimensions( h );
+				const numSimCells = simCols * simRows;
 				const { bufferCols, bufferRows, numBufferCells } = getBufferGridDimensions(simCols, simRows, 1);
 				const velXBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
 				const velYBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
@@ -198,16 +246,7 @@
 				for (let i = 0; i < numSimCells; i++) {
 
 					const cellIndex = getCellIndexFromInstanceIndex( i, simCols, bufferCols );
-					const lIndex = cellIndex - 1;
-					const rIndex = cellIndex + 1;
-					const uIndex = cellIndex + bufferCols;
-					const bIndex = cellIndex - bufferCols;
-
-					const inflowIntoCell = velXBufferAttribute.array[cellIndex] + velYBufferAttribute.array[cellIndex];
-					console.log(inflowIntoCell)
-					const outflowOutOfCell = velXBufferAttribute.array[rIndex] + velYBufferAttribute.array[uIndex];
-
-					outflowBufferAttribute.array[cellIndex] = outflowOutOfCell - inflowIntoCell;
+					outflowBufferAttribute.array[cellIndex] = calculateCellOutflow( velXBufferAttribute.array, velYBufferAttribute.array, cellIndex, bufferCols );
 
 				}
 
@@ -238,7 +277,7 @@
 					const velXRead = storageReadOnly( velXBufferAttribute, 'float', numBufferCells );
 					const velYRead = storageReadOnly( velYBufferAttribute, 'float', numBufferCells );
 					const outflowRead = storageReadOnly( outflowBufferAttribute, 'float', numBufferCells );
-					const uvGrid = temp( uv().mul( vec2( simCols, simRows ) ), 'uvGrid' );
+					const uvGrid = temp( uv().mul( vec2( simColsUniform, simRowsUniform ) ), 'uvGrid' );
 					// 2D Coordinate in Simulation Grid
 					const simGrid2DIndex = temp( floor( uvGrid ), 'simGrid2DIndex' );
 					// 2D Coordinate in Buffer Grid
@@ -311,6 +350,16 @@
 				const mesh = new THREE.Mesh(geometry, instancedMeshMaterial);
 				sceneDivergencePlayground.add(mesh)
 
+				sceneDivergenceInfo = {
+					simCols: simCols, 
+					simRows: simRows, 
+					bufferCols: bufferCols,
+					bufferRows: bufferRows,
+				}
+
+			}
+
+			const setupSceneWindTunnel = () => {
 
 			}
 
@@ -331,6 +380,9 @@
 				document.body.appendChild( renderer.domElement );
 				window.addEventListener( 'resize', onWindowResize );
 
+				// For now try to use same camera for each scene
+				camera = new THREE.OrthographicCamera( - 1, 1, 1, - 1, 0, 1 );
+
 				// Create simulation height
 				simHeight = 1.0
 				cScale = canvas.height / simHeight;
@@ -340,17 +392,25 @@
 				const res = 100;
 				const h = domainHeight / res;
 
-
-				
+				simColsUniform = uniform(0);
+				simRowsUniform = uniform(0);
+				bufferColsUniform = uniform(0);
+				bufferRowsUniform = uniform(0);
 
 				setupSceneDivergencePlayground();
-
-				// For now try to use same camera for each scene
-				camera = new THREE.OrthographicCamera( - 1, 1, 1, - 1, 0, 1 );
+				setupSceneWindTunnel();
 
 
-				const {simCols, simRows, numSimCells} = getSimGridDimensions(h);
+				const {simCols, simRows} = getSimGridDimensions(h);
+				const numSimCells = simCols * simRows;
 				const {bufferCols, bufferRows, numBufferCells} = getBufferGridDimensions(simCols, simRows, 1);
+
+				sceneWindTunnelInfo = {
+					simCols: simCols,
+					simRows: simRows,
+					bufferCols: bufferCols,
+					bufferRows: bufferRows,
+				}
 
 				// Velocity x (or u) located at center of left side of grid cell
 				const velXStartBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
@@ -423,7 +483,6 @@
 					// Create shader storage buffers
 						const velXRead = createReadStorage( velXStartBufferAttribute, 'float');
 						const velYRead = createReadStorage( velXStartBufferAttribute, 'float');
-
 						const velXWrite = createWriteStorage( velXDivergenceBufferAttribute, 'float');
 						const velYWrite = createWriteStorage( velYDivergenceBufferAttribute, 'float');
 
@@ -446,19 +505,8 @@
 							Return();
 						});
 
-						// Subtract inflow of current cell from inflow of adjacent cells to get the outflow.
-						// Current cell inflow represents negative outflow from current cell.
-						const currentCellInflowX = temp(velXRead.element(cellIndex), 'currentCellInflowX');
-						const currentCellInflowY = temp(velYRead.element(cellIndex), 'currentCellInflowY');
-						const currentCellInflow = temp(currentCellInflowX.add(currentCellInflowY), 'currentCellInflow');
-
-						// Adjacent cell inflow represents positive outflow from current cell.
-						const adjacentCellInflowX = velXRead.element(rIndex);
-						const adjacentCellInflowY = velYRead.element(uIndex);
-						const adjacentCellInflow = temp(adjacentCellInflowX.add(adjacentCellInflowY), 'adjacentCellInfow');
-
-						const outflow = temp(adjacentCellInflow.sub(currentCellInflow), 'outflow');
-						const negativeOutflow = outflow.sub(outflow.mul(2))
+						const outflow = calculateCellOutflowTSL(velXRead, velYRead, cellIndex, rIndex, uIndex);
+						const negativeOutflow = negate(outflow);
 					
 						let pressure = negativeOutflow.div(cellScalar);
 						pressure.mulAssign(overRelaxationUniform);
@@ -488,8 +536,6 @@
 				const returnColor = (r, g, b) => {
 					return vec3(r, g, b);
 				}
-
-
 
 				computeIntegration = tslFn(() => {
 
@@ -556,7 +602,6 @@
 
 				});
 
-				camera = new THREE.OrthographicCamera( - 1, 1, 1, - 1, 0, 1 );
 				sceneWindTunnel = new THREE.Scene();
 
 				const geometry = new THREE.PlaneGeometry( 2, 2 );
@@ -571,31 +616,8 @@
 				}));
 				sceneWindTunnel.add( simWithTextureQuad );
 				simWithTextureQuad.visible = false;
-
-				const params = {
-					method: 'storageBuffer'
-				};
-
-				const gui = new GUI();
-
-				gui.add(params, 'method', computeMethods).onChange(() => {
-					console.log(params.method)
-
-					if (params.method === 'storageBuffer') {
-
-						simWithTextureQuad.visible = false;
-						simWithStorageQuad.visible = true;
-
-					}
-
-					if (params.method === 'storageTexture') {
-						
-						simWithStorageQuad.visible = false;
-						simWithTextureQuad.visible = true;
-
-					}
-
-				})
+				
+				switchScene(currentSceneIndex);
 
 				renderer.setAnimationLoop( animate );
 
