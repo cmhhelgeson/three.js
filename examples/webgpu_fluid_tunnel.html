@@ -38,7 +38,7 @@
 
 			// Define objects shared across scenes
 			// Same orthographic camera and WebGPU renderer used across both scenes.
-			let camera, renderer, currentScene, currentSceneInfo;
+			let camera, renderer, mouse, currentScene, currentSceneInfo;
 			// Uniforms
 			let simColsUniform, simRowsUniform, bufferColsUniform, bufferRowsUniform;
 			// Shared scene info
@@ -155,6 +155,27 @@
 				return outflowFromCell.sub(inflowIntoCell);
 
 			}
+
+			const correctCellDivergence = (
+				velXArray,
+				velYArray,
+				cellIndex, 
+				bufferCols,
+			) => {
+				const outflow = calculateCellOutflow(velXArray, velYArray, cellIndex, bufferCols);
+					
+				let pressure = -outflow / cellScalar.div(cellScalar);
+				//pressure.mulAssign(overRelaxationUniform);
+					
+				pressureWrite.element(cellIndex).addAssign(pressure);
+
+				velXArray[cellIndex] -= lScalar * pressure;
+				velXArray[cellIndex + 1] += rScalar + pressure;
+
+				velYArray[cellIndex] -= bScalar * pressure;
+				velYArray[cellIndex + 1] += uScalar * pressure;
+
+			}
 			
 			const createProjectionComputeShaders = ( velXAttrib, velYAttrib, pressureAttrib, scalarAttrib, sceneInfo ) => {
 				// Create shader storage buffers
@@ -189,7 +210,7 @@
 						const negativeOutflow = negate(outflow);
 					
 						let pressure = negativeOutflow.div(cellScalar);
-						pressure.mulAssign(overRelaxationUniform);
+						//pressure.mulAssign(overRelaxationUniform);
 					
 						pressureWrite.element(cellIndex).addAssign(pressure);
 
@@ -221,6 +242,15 @@
 				const rotateX = cosAngle.mul( pointNode.x ).add( sinAngle.mul( pointNode.y ) );
 				const rotateY = negate( sinAngle ).mul( pointNode.x ).add( cosAngle.mul( pointNode.y ) );
 				return vec2( rotateX, rotateY );
+
+			}
+
+			const getBorderTSL = ( uvNode, widthNode ) => {
+
+				const bl = step(vec2(widthNode), uvNode);
+				const tr = step(vec2(widthNode), negate(uvNode).add(1.0));
+				const isBorder = abs(bl.x.mul(bl.y).mul(tr.x).mul(tr.y).sub(1.0));
+				return vec3(isBorder.mul(0.0), isBorder.mul(0.25), isBorder.mul(1.0));
 
 			}
 
@@ -301,17 +331,43 @@
 					projectionIterations: 100,
 				}
 
+				// Scene specific uniforms
+				const highlightedSimCellUniform = uniform(13);
+				canvas.addEventListener('mousemove', (event) => {
+
+					const cellWidth = canvas.clientWidth / simCols;
+					const cellHeight = canvas.clientHeight / simRows;
+					const cellX = Math.floor(event.clientX / cellWidth);
+					const cellY = Math.floor((canvas.clientHeight - event.clientY) / cellHeight);
+
+					const cellBufferX = cellX + 1;
+					const cellBufferY = cellY + 1;
+					const cellIndex = cellBufferX + cellBufferY * bufferCols;
+					highlightedSimCellUniform.value = cellIndex
+
+				})
+
+				canvas.addEventListener('click', (event) => {
+
+				})
+
 				// Create attributes for compute calculations
 				const velXBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
 				const velYBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
 				const outflowBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
+				const scalarBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
+
+				// Make all cells obstacle
+				scalarBufferAttribute.array.fill(0);
 				
 				// Randomize velocity values
 				for (let i = 0; i < numSimCells; i++) {
 
 					const cellIndex = getCellIndexFromInstanceIndex( i, simCols, bufferCols );
-					velXBufferAttribute.array[cellIndex] = 3;//3Math.random() * (maximumVelocity * 2) - maximumVelocity;
-					velYBufferAttribute.array[cellIndex] = 3;//Math.random() * (maximumVelocity * 2) - maximumVelocity;
+					velXBufferAttribute.array[cellIndex] = Math.random() * (maximumVelocity * 2) - maximumVelocity;
+					velYBufferAttribute.array[cellIndex] = Math.random() * (maximumVelocity * 2) - maximumVelocity;
+					// Indicate that cell is sim cell and not obstacle cell.
+					scalarBufferAttribute.array[cellIndex] = 1;
 
 				}
 
@@ -391,28 +447,33 @@
 
 					// Apply circle SDF with radius defined by the outflow
 					// Put outflow in range of -1 to 1. The maximum outflow is maxVelocityX + maxVelocityY. The minimumn outflow is the inverse of the maximumn (i.e everything flowing in or everything flowing out)
-					const normalizedOutflow = outflow.div(maximumVelocity * 2);
+					const normalizedOutflow = temp(outflow.div(maximumVelocity * 2), 'normalizedOutflow');
 					const circleRadius = float(outflowIndicatorMaxRadius).mul(abs(normalizedOutflow));
 
-					const circleSDF = min(sdfCircleTSL(uvCellNDC, circleRadius), 0.01);
-					const circleCheck = circleSDF.greaterThan(0.0);
+					const circleSDF = temp(min(sdfCircleTSL(uvCellNDC, circleRadius), 0.01), 'circleSDF');
+					const circleCheck = temp(circleSDF.lessThan(0.0), 'circleCheck');
 					const textureColor = temp(
 						texture(waterTexture, samplePoint),
 						'textureColor'
 					);
 
 					// When outflow is positive, show green, else show black.
-					const circleColor = normalizedOutflow.lessThan(0.0).cond(black, green);
+					const circleColor = temp( normalizedOutflow.lessThan(0.0).cond(black, green), 'circleColor');
 
 					// Apply outflow indicator to color (green for outflow/production, black for inflow/destruction)
-					textureColor.x.assign(circleCheck.cond(textureColor.x, circleColor.x));
-					textureColor.y.assign(circleCheck.cond(textureColor.y, circleColor.y));
-					textureColor.z.assign(circleCheck.cond(textureColor.z, circleColor.z));
+					textureColor.x.assign(mix(textureColor.x, circleColor.x, circleCheck));
+					textureColor.y.assign(mix(textureColor.y, circleColor.y, circleCheck));
+					textureColor.z.assign(mix(textureColor.z, circleColor.z, circleCheck));
 
 					// Apply Arrow SDF to color
 					textureColor.addAssign(white.mul(arrowCheck));
+
+					// Apply Border on highlight 
+					const isCellHighlighted = temp(cellIndex.equal(highlightedSimCellUniform), 'isCellHighlighted');
+					const borderColor = getBorderTSL(uvCell, 0.03).mul(isCellHighlighted);
+					const finalColor = mix(textureColor.rgb, borderColor, max(borderColor.r, max(borderColor.g, borderColor.b)));
 						
-					return textureColor;
+					return finalColor;
 				})
 
 				const instancedMeshMaterial = new MeshBasicNodeMaterial();
