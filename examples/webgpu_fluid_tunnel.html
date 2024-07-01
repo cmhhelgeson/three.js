@@ -38,18 +38,21 @@
 
 			// Define objects shared across scenes
 			// Same orthographic camera and WebGPU renderer used across both scenes.
-			let camera, renderer, mouse, currentScene, currentSceneInfo;
+			let camera, renderer, mouse, currentScene, currentSceneInfo, settings;
 			// Uniforms
-			let simColsUniform, simRowsUniform, bufferColsUniform, bufferRowsUniform;
-			// Shared scene info
+			let uSimCols, uSimRows, uBufferCols, uBufferRows;
+			// Scene info
 			let sceneDivergenceInfo, sceneWindTunnelInfo;
-
-			// Scene 0: View divergence adjustment in isolation
-			// Scene 1: Wind tunnel fluid simulation.
 			let sceneDivergencePlayground, sceneWindTunnel;
 			const SCENE_DIVERGENCE_PLAYGROUND = 0;
 			const SCENE_WIND_TUNNEL = 1;
-			let currentSceneIndex = 0;
+			let currentSceneIndex = SCENE_DIVERGENCE_PLAYGROUND;
+			const sceneEnum = {
+
+				'Divergence Playground': SCENE_DIVERGENCE_PLAYGROUND,
+				'Wind Tunnel': SCENE_WIND_TUNNEL
+
+			}
 
 			// Will the wind tunnel fragment shader pull its velocity from a storage texture or a storage buffer?
 			let storageFragmentShader, textureFragmentShader;
@@ -64,15 +67,15 @@
 
 			// Define the compute shaders that will perform our per-frame fluid simulation
 			// Step 1. Apply gravity to velocity x, y (u, v);
-			let computeIntegration;
+			//let computeIntegration;
 			// Step 2. Compute divergence, make velocity of each cell incompressible (used in divergence playground as well)
-			let computeDiv_I0J0, computeDiv_I0J1, computeDiv_I1J0, computeDiv_I1J1;
+			//let computeDiv_I0J0, computeDiv_I0J1, computeDiv_I1J0, computeDiv_I1J1;
 			// Step 3. Extrapolate velocities of buffer cells from divergence velocities.
-			let computeExtrapolateX, computeExtrapolateY;
+			//let computeExtrapolateX, computeExtrapolateY;
 			// Step 4. Advect velocities;
-			let computeAdvection;
+			//let computeAdvection;
 			// Step 5. Advect smoke;
-			let computeSmoke;
+			//let computeSmoke;
 
 			const canvas = document.getElementById('c');
 
@@ -127,6 +130,39 @@
 
 			}
 
+			const getOffsetCellIndexTSL = ( dispatchesX, offsetX, offsetY ) => {
+
+				// Work in the coordinates of our non-adjacent cells compressed together into a separate grid
+				// In a 2d compute execution context, these are analagous with the x and y ids of our threads
+				const compactGridCol = temp(instanceIndex.remainder(dispatchesX), 'compactGridX');
+				const compactGridRow = temp(instanceIndex.div(dispatchesX), 'compactGridY' );
+
+				// Get location of compact grid cell in sim grid cell space
+				const simGridCol = compactGridCol.mul(2).add(offsetX);
+				const simGridRow = compactGridRow.mul(2).add(offsetY);
+
+				// Get index of sim grid cell in buffer grid (x, y)
+				const bufferGridCol = temp(simGridCol.add(1), 'bufferGridX');
+				const bufferGridRow = temp(simGridRow.add(1), 'bufferGridY');
+
+				// Convert to 1D index into buffered grid for storage buffer access
+				return temp(
+					bufferGridCol.add(bufferGridRow.mul(bufferCols)),
+					'cellIndex',
+				);
+
+			}
+
+			const getIndexedValuesFromStorageTSL = ( readBuffer, indices ) => {
+
+				const nodes = [];
+				for (let i = 0; i < indices.length; i ++) {
+					nodes.push(readBuffer.element(indices[i]));
+				}
+				return nodes;
+
+			}
+
 			// Compute utility functions
 			const calculateCellOutflow = (
 				velXArray,
@@ -155,6 +191,7 @@
 				return outflowFromCell.sub(inflowIntoCell);
 
 			}
+			
 
 			const correctCellDivergence = (
 				velXArray,
@@ -165,7 +202,7 @@
 				const outflow = calculateCellOutflow(velXArray, velYArray, cellIndex, bufferCols);
 					
 				let pressure = -outflow / cellScalar.div(cellScalar);
-				//pressure.mulAssign(overRelaxationUniform);
+				//pressure.mulAssign(uOverRelaxation);
 					
 				pressureWrite.element(cellIndex).addAssign(pressure);
 
@@ -176,13 +213,19 @@
 				velYArray[cellIndex + 1] += uScalar * pressure;
 
 			}
-			
+
+			const calculateDivergenceStepDispatches = (numCols, numRows, offsetX, offsetY) => {
+				const dispatchX = Math.floor( (numCols + 1 - offsetX) / 2);
+				const dispatchY = Math.floor( (numRows + 1 - offsetY) / 2);
+				return { dispatchX, dispatchY };
+			}
+
 			const createProjectionComputeShaders = ( velXAttrib, velYAttrib, pressureAttrib, scalarAttrib, sceneInfo ) => {
 				// Create shader storage buffers
 				const velXStorage = storage(velXAttrib, 'float', sceneInfo.numBufferCells );
-				const velYStorage = createReadStorage( velYAttrib, 'float', sceneInfo.numBufferCells );
-				const pressureStorage = createWriteStorage( pressureAttrib, 'float', sceneInfo.numBufferCells);
-				const scalarStorage = createReadStorage( scalarAttrib, 'uint', sceneInfo.numBufferCells );
+				const velYStorage = storage( velYAttrib, 'float', sceneInfo.numBufferCells );
+				const pressureStorage = storage( pressureAttrib, 'float', sceneInfo.numBufferCells);
+				const scalarStorage = storage( scalarAttrib, 'uint', sceneInfo.numBufferCells );
 
 				const createProjectionShader = ( offsetX, offsetY ) => {
 					const {dispatchX, dispatchY} = calculateDivergenceStepDispatches(sceneInfo.simCols, sceneInfo.simRows, offsetX, offsetY);
@@ -195,10 +238,10 @@
 						// No need for boundary checks since our cellIndex is buffered
 						const lIndex = temp(cellIndex.sub(1), 'cellLeftIndex');
 						const rIndex = temp(cellIndex.add(1), 'cellRightIndex');
-						const uIndex = temp(cellIndex.add(bufferColsUniform), 'cellAboveIndex');
-						const bIndex = temp(cellIndex.sub(bufferColsUniform), 'cellBelowIndex');
+						const uIndex = temp(cellIndex.add(uBufferCols), 'cellAboveIndex');
+						const bIndex = temp(cellIndex.sub(uBufferCols), 'cellBelowIndex');
 
-						const [lScalar, rScalar, uScalar, bScalar] = getIndexedValuesFromStorage(scalarStorage, [lIndex, rIndex, uIndex, bIndex]);
+						const [lScalar, rScalar, uScalar, bScalar] = getIndexedValuesFromStorageTSL(scalarStorage, [lIndex, rIndex, uIndex, bIndex]);
 
 						const cellScalar = temp(lScalar.add(rScalar).add(uScalar).add(bScalar), 'cellScalar');
 
@@ -209,28 +252,30 @@
 						const outflow = calculateCellOutflowTSL(velXStorage, velYStorage, cellIndex, rIndex, uIndex);
 						const negativeOutflow = negate(outflow);
 					
-						let pressure = negativeOutflow.div(cellScalar);
-						//pressure.mulAssign(overRelaxationUniform);
+						const newPressure = negativeOutflow.div(cellScalar);
+						//pressure.mulAssign(uOverRelaxation);
 					
-						pressureWrite.element(cellIndex).addAssign(pressure);
+						pressureStorage.element(cellIndex).addAssign(newPressure);
 
 						// Apply scalars to cell velocities
 						// Velocity X
-						velXStorage.element(cellIndex).subAssign(lScalar.mul(pressure));
-						velXStorage.element(rIndex).addAssign(rScalar.mul(pressure));
+						velXStorage.element(cellIndex).subAssign(lScalar.mul(newPressure));
+						velXStorage.element(rIndex).addAssign(rScalar.mul(newPressure));
 						// Velocity Y
-						velYStorage.element(cellIndex).subAssign(bScalar.mul(pressure));
-						velYStorage.element(uIndex).addAssign(uScalar.mul(pressure));
+						velYStorage.element(cellIndex).subAssign(bScalar.mul(newPressure));
+						velYStorage.element(uIndex).addAssign(uScalar.mul(newPressure));
 
 					})().compute(dispatches);
 
 				}
 
-				// Assign properly alligned divergence shaders to projection info
-				sceneInfo.projectionI0J0 = createProjectionShader(0, 0);
-				sceneInfo.projectionI1J0 = createProjectionShader(1, 0);
-				sceneInfo.projectionI0J1 = createProjectionShader(0, 1);
-				sceneInfo.projectionI1J1 = createProjectionShader(1, 1);
+				// Assign properly alligned divergence shaders to compute projection step
+				sceneInfo.computeProjection = [
+					createProjectionShader( 0, 0 ), 
+					createProjectionShader( 1, 0 ),
+					createProjectionShader( 0, 1 ),
+					createProjectionShader( 1, 1 )
+				];
 				
 			}
 
@@ -304,10 +349,10 @@
 					currentScene = sceneWindTunnel;
 				}
 
-				simColsUniform = currentSceneInfo.simCols;
-				simRowsUniform = currentSceneInfo.simRows;
-				bufferColsUniform = currentSceneInfo.bufferCols;
-				bufferRowsUniform = currentSceneInfo.bufferRows;
+				uSimCols = currentSceneInfo.simCols;
+				uSimRows = currentSceneInfo.simRows;
+				uBufferCols = currentSceneInfo.bufferCols;
+				uBufferRows = currentSceneInfo.bufferRows;
 
 			}
 
@@ -317,10 +362,12 @@
 				const res = 10;
 				const h = domainHeight / res;
 
-				// Get grid dimensions and apply to scene info
+				// Get proper buffer grid and simulation grid dimensions
 				const { simCols, simRows } = getSimGridDimensions( h );
 				const numSimCells = simCols * simRows;
 				const { bufferCols, bufferRows, numBufferCells } = getBufferGridDimensions(simCols, simRows, 1);
+
+				// Create scene info template, which gets filled out as we initialize this scene
 				sceneDivergenceInfo = {
 					simCols: simCols, 
 					simRows: simRows, 
@@ -328,11 +375,12 @@
 					bufferCols: bufferCols,
 					bufferRows: bufferRows,
 					numBufferCells: bufferCols * bufferRows,
-					projectionIterations: 100,
 				}
 
 				// Scene specific uniforms
-				const highlightedSimCellUniform = uniform(13);
+				const uSelectSimCell = uniform(13);
+
+				// Scene specific Web API events
 				canvas.addEventListener('mousemove', (event) => {
 
 					const cellWidth = canvas.clientWidth / simCols;
@@ -343,15 +391,11 @@
 					const cellBufferX = cellX + 1;
 					const cellBufferY = cellY + 1;
 					const cellIndex = cellBufferX + cellBufferY * bufferCols;
-					highlightedSimCellUniform.value = cellIndex
+					uSelectSimCell.value = cellIndex
 
 				})
 
-				canvas.addEventListener('click', (event) => {
-
-				})
-
-				// Create attributes for compute calculations
+				// Create buffers for compute calculations
 				const velXBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
 				const velYBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
 				const outflowBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
@@ -364,7 +408,7 @@
 				for (let i = 0; i < numSimCells; i++) {
 
 					const cellIndex = getCellIndexFromInstanceIndex( i, simCols, bufferCols );
-					velXBufferAttribute.array[cellIndex] = Math.random() * (maximumVelocity * 2) - maximumVelocity;
+					velXBufferAttribute.array[cellIndex] = 2;//Math.random() * (maximumVelocity * 2) - maximumVelocity;
 					velYBufferAttribute.array[cellIndex] = Math.random() * (maximumVelocity * 2) - maximumVelocity;
 					// Indicate that cell is sim cell and not obstacle cell.
 					scalarBufferAttribute.array[cellIndex] = 1;
@@ -379,9 +423,8 @@
 
 				}
 
-				console.log(velXBufferAttribute.array);
-				console.log(velYBufferAttribute.array);
-				console.log(outflowBufferAttribute.array)
+				// Create Compute Shaders
+				createProjectionComputeShaders(velXBufferAttribute, velYBufferAttribute, pressureBufferAttribute, scalarBufferAttribute)
 				
 				sceneDivergencePlayground = new THREE.Scene();
 
@@ -406,7 +449,7 @@
 					const velXRead = storageReadOnly( velXBufferAttribute, 'float', numBufferCells );
 					const velYRead = storageReadOnly( velYBufferAttribute, 'float', numBufferCells );
 					const outflowRead = storageReadOnly( outflowBufferAttribute, 'float', numBufferCells );
-					const uvGrid = temp( uv().mul( vec2( simColsUniform, simRowsUniform ) ), 'uvGrid' );
+					const uvGrid = temp( uv().mul( vec2( uSimCols, uSimRows ) ), 'uvGrid' );
 					// 2D Coordinate in Simulation Grid
 					const simGrid2DIndex = temp( floor( uvGrid ), 'simGrid2DIndex' );
 					// 2D Coordinate in Buffer Grid
@@ -469,21 +512,146 @@
 					textureColor.addAssign(white.mul(arrowCheck));
 
 					// Apply Border on highlight 
-					const isCellHighlighted = temp(cellIndex.equal(highlightedSimCellUniform), 'isCellHighlighted');
+					const isCellHighlighted = temp(cellIndex.equal(uSelectSimCell), 'isCellHighlighted');
 					const borderColor = getBorderTSL(uvCell, 0.03).mul(isCellHighlighted);
 					const finalColor = mix(textureColor.rgb, borderColor, max(borderColor.r, max(borderColor.g, borderColor.b)));
 						
 					return finalColor;
 				})
 
-				const instancedMeshMaterial = new MeshBasicNodeMaterial();
-				instancedMeshMaterial.colorNode = divergenceFragmentNode();
-				const mesh = new THREE.Mesh(geometry, instancedMeshMaterial);
+				const nodeMaterial = new MeshBasicNodeMaterial();
+				nodeMaterial.colorNode = divergenceFragmentNode();
+				const mesh = new THREE.Mesh(geometry, nodeMaterial);
+
 				sceneDivergencePlayground.add(mesh)
 
 			}
 
 			const setupSceneWindTunnel = () => {
+
+				// Set resolution and determine grid cell height based on resolution
+				const res = 100;
+				const h = domainHeight / res;
+
+				// Get wind tunnel buffer grid and simulation grid dimensions
+				const {simCols, simRows} = getSimGridDimensions(h);
+				const numSimCells = simCols * simRows;
+				const {bufferCols, bufferRows, numBufferCells} = getBufferGridDimensions(simCols, simRows, 1);
+
+				sceneWindTunnelInfo = {
+					simCols: simCols,
+					simRows: simRows,
+					numSimCells: numSimCells,
+					bufferCols: bufferCols,
+					bufferRows: bufferRows,
+					numBufferCells: numBufferCells
+				}
+
+				// Create buffers and uniforms specific to wind tunnel simulation
+				const velXBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
+				const velYBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
+				const pressureBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
+				const dBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
+				const scalarBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
+
+				const uOverRelaxation = uniform(1.9);
+				const uCP = uniform(1000)
+				const uDensity = uniform(1000);
+				const uGravity = uniform(-9.81);
+
+				createProjectionComputeShaders( velXBufferAttribute, velYBufferAttribute, pressureBufferAttribute, scalarBufferAttribute, sceneWindTunnelInfo );
+
+				const computeIntegrationShader = tslFn(() => {
+
+					const velYWriteBuffer = storage(velYStartBufferAttribute, 'float', numBufferCells);
+					const cellIndex = getCellIndexFromInstanceIndexTSL( simCols, bufferCols );
+					velYWriteBuffer.element(cellIndex).addAssign(gravityUniform.mul(deltaTimeUniform));
+
+				})().compute(numSimCells);
+
+				// Extrapolate velocity of buffer cells from surrounding simulation cells.
+				// Effectively a post-processing part of the divergence/outflow/incompressibility step.
+				// Shader is a bit of hack, making use of the fact that our grid dimensions are always square.
+				const computeExtrapolateXShader = tslFn(() => {
+					const velXReadWrite = storage(velXDivergenceBufferAttribute, 'float', 1);
+
+					// Buffer cell to left of first simulation column
+					const cellLeftBufferIndex = instanceIndex.mul(bufferCols);
+					// Buffer cell to right of last simulation column
+					const cellRightBufferIndex = cellLeftBufferIndex.add(bufferCols - 1);
+
+					// Apply horizontal velocity of simulation cells to left and right buffer cells
+					const leftBufferVelocity = velXReadWrite.element(cellLeftBufferIndex);
+					leftBufferVelocity.assign(velXReadWrite.element(cellLeftBufferIndex.add(1)));
+
+					const rightBufferVelocity = velXReadWrite.element(cellRightBufferIndex);
+					rightBufferVelocity.assign(velXReadWrite.element(cellRightBufferIndex.sub(1)));
+
+				})().compute(bufferRows); 
+
+				const computeExtrapolateYShader = tslFn(() => {
+					const velYReadWrite = storage(velYDivergenceBufferAttribute, 'float', 1);
+
+					// Buffer cell below first simulation row
+					const cellBottomBufferIndex = instanceIndex;
+					// Buffer cell above last simulation row
+					const cellTopBufferIndex = instanceIndex.add(bufferCols * bufferRows - 1);
+
+					// Apply vertical velocity of simulation cells to top and bottom buffer cells
+					const bottomBufferVelocity = velYReadWrite.element(cellBottomBufferIndex);
+					bottomBufferVelocity.assign(velYReadWrite.element(cellBottomBufferIndex.add(1)));
+
+					const topBufferVelocity = velYReadWrite.element(cellTopBufferIndex);
+					topBufferVelocity.assign(velYReadWrite.element(cellTopBufferIndex.sub(1)));
+
+				})().compute(bufferCols)
+
+
+				const computeAdvectionShader = tslFn(() => {
+
+				}).compute(numBufferCells);
+
+				const returnColor = (r, g, b) => {
+					return vec3(r, g, b);
+				}
+
+
+				const storageFragmentShader = createColorOutputTSL(1.0, 0.0, 0.0);
+
+				const textureFragmentShader = tslFn(() => {
+
+					returnColor(r, g, b);
+
+				});
+
+				sceneWindTunnel = new THREE.Scene();
+
+				const geometry = new THREE.PlaneGeometry( 2, 2 );
+
+				const simWithStorageQuad = new THREE.Mesh( geometry, new MeshBasicNodeMaterial({
+					colorNode: storageFragmentShader(),
+				}));
+				sceneWindTunnel.add( simWithStorageQuad );
+
+				const simWithTextureQuad = new THREE.Mesh( geometry, new MeshBasicNodeMaterial({
+					colorNode: textureFragmentShader(),
+				}));
+				sceneWindTunnel.add( simWithTextureQuad );
+				simWithTextureQuad.visible = false;
+
+
+				sceneWindTunnelInfo = {
+					simCols: simCols,
+					simRows: simRows,
+					bufferCols: bufferCols,
+					bufferRows: bufferRows,
+					computeIntegration: computeIntegrationShader,
+					computeProjection: [computeDiv_I0J0, computeDiv_I0J1, computeDiv_I1J0, computeDiv_I1J1],
+					computeExtrapolateX: computeExtrapolateXShader,
+					computeExtrapolateY: computeExtrapolateYShader,
+					computeAdvection: computeAdvectionShader,
+
+				}
 
 			}
 
@@ -513,236 +681,26 @@
 				simWidth = canvas.width / cScale;
 				domainHeight = 1.0;
 				domainWidth = domainHeight / simHeight * simWidth;
-				const res = 100;
-				const h = domainHeight / res;
 
-				simColsUniform = uniform(0);
-				simRowsUniform = uniform(0);
-				bufferColsUniform = uniform(0);
-				bufferRowsUniform = uniform(0);
+				uSimCols = uniform(0);
+				uSimRows = uniform(0);
+				uBufferCols = uniform(0);
+				uBufferRows = uniform(0);
 
 				setupSceneDivergencePlayground();
 				setupSceneWindTunnel();
-
-
-				const {simCols, simRows} = getSimGridDimensions(h);
-				const numSimCells = simCols * simRows;
-				const {bufferCols, bufferRows, numBufferCells} = getBufferGridDimensions(simCols, simRows, 1);
-
-				sceneWindTunnelInfo = {
-					simCols: simCols,
-					simRows: simRows,
-					bufferCols: bufferCols,
-					bufferRows: bufferRows,
-					projectionIterations: 100,
-				}
-
-				// Velocity x (or u) located at center of left side of grid cell
-				const velXStartBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
-				const velXDivergenceBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
-				const velXAdvectionBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
-				// Velocity y (or v) located at center of bottom side of grid cell
-				const velYStartBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
-				const velYDivergenceBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
-				const velYAdvectionBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
-
-				const pressureBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
-				const dBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
-				const scalarBufferAttribute = new StorageBufferAttribute( numBufferCells, 1 );
-
-				const overRelaxationUniform = uniform(1.9);
-				const cpUniform = uniform(1000)
-				const densityUniform = uniform(1000);
-
-				const deltaTimeUniform = uniform( 1 / 120.0 );
-				const gravityUniform = uniform( -9.81 );
-
-				const createReadStorage = ( attribute, type ) => storageReadOnly( attribute, type, numBufferCells);
-				// Technically read-write storage
-				const createWriteStorage = ( attribute, type ) => storage( attribute, type, numBufferCells );
-
-				const getOffsetCellIndexTSL = ( dispatchesX, offsetX, offsetY ) => {
-
-					// Work in the coordinates of our non-adjacent cells compressed together into a separate grid
-					// In a 2d compute execution context, these are analagous with the x and y ids of our threads
-					const compactGridCol = temp(instanceIndex.remainder(dispatchesX), 'compactGridX');
-					const compactGridRow = temp(instanceIndex.div(dispatchesX), 'compactGridY' );
-
-					// Get location of compact grid cell in sim grid cell space
-					const simGridCol = compactGridCol.mul(2).add(offsetX);
-					const simGridRow = compactGridRow.mul(2).add(offsetY);
-
-					// Get index of sim grid cell in buffer grid (x, y)
-					const bufferGridCol = temp(simGridCol.add(1), 'bufferGridX');
-					const bufferGridRow = temp(simGridRow.add(1), 'bufferGridY');
-
-					// Convert to 1D index into buffered grid for storage buffer access
-					return temp(
-						bufferGridCol.add(bufferGridRow.mul(bufferCols)),
-						'cellIndex',
-					);
-
-				}
-
-				const calculateDivergenceStepDispatches = (numCols, numRows, offsetX, offsetY) => {
-					const dispatchX = Math.floor( (numCols + 1 - offsetX) / 2);
-					const dispatchY = Math.floor( (numRows + 1 - offsetY) / 2);
-					return { dispatchX, dispatchY };
-				}
-
-				const testDivergenceSteps = (numCols, numRows) => {
-					console.log(calculateDivergenceStepDispatches(numCols, numRows, 0, 0));
-					console.log(calculateDivergenceStepDispatches(numCols, numRows, 1, 0))
-					console.log(calculateDivergenceStepDispatches(numCols, numRows, 0, 1))
-					console.log(calculateDivergenceStepDispatches(numCols, numRows, 1, 1))
-				}
-
-				testDivergenceSteps(6, 6);
-
-				const createDivergenceShader = ( offsetX, offsetY ) => {
-
-					const {dispatchX, dispatchY} = calculateDivergenceStepDispatches(simCols, simRows, offsetX, offsetY);
-					const dispatches = dispatchX * dispatchY;
-
-					return tslFn(() => {
-					// Create shader storage buffers
-						const velXRead = createReadStorage( velXStartBufferAttribute, 'float');
-						const velYRead = createReadStorage( velXStartBufferAttribute, 'float');
-						const velXWrite = createWriteStorage( velXDivergenceBufferAttribute, 'float');
-						const velYWrite = createWriteStorage( velYDivergenceBufferAttribute, 'float');
-
-						const pressureWrite = createWriteStorage( pressureBufferAttribute, 'float');
-						const scalarRead = createReadStorage( scalarBufferAttribute, 'uint');
-
-						const cellIndex = getOffsetCellIndexTSL( dispatchX, offsetX, offsetY );
-					
-						// No need for boundary checks since our cellIndex is buffered
-						const lIndex = temp(cellIndex.sub(1), 'cellLeftIndex');
-						const rIndex = temp(cellIndex.add(1), 'cellRightIndex');
-						const uIndex = temp(cellIndex.add(bufferCols), 'cellAboveIndex');
-						const bIndex = temp(cellIndex.sub(bufferCols), 'cellBelowIndex');
-
-						const [lScalar, rScalar, uScalar, bScalar] = getIndexedValuesFromStorage(scalarRead, [lIndex, rIndex, uIndex, bIndex]);
-
-						const cellScalar = temp(lScalar.add(rScalar).add(uScalar).add(bScalar), 'cellScalar');
-
-						If(cellScalar.equal(0.0), () => {
-							Return();
-						});
-
-						const outflow = calculateCellOutflowTSL(velXRead, velYRead, cellIndex, rIndex, uIndex);
-						const negativeOutflow = negate(outflow);
-					
-						let pressure = negativeOutflow.div(cellScalar);
-						pressure.mulAssign(overRelaxationUniform);
-					
-						pressureWrite.element(cellIndex).addAssign(pressure);
-
-						// Apply scalars to cell velocities
-						// Velocity X
-						velXWrite.element(cellIndex).subAssign(lScalar.mul(pressure));
-						velXWrite.element(rIndex).addAssign(rScalar.mul(pressure));
-						// Velocity Y
-						velYWrite.element(cellIndex).subAssign(bScalar.mul(pressure));
-						velXWrite.element(rIndex).addAssign(rScalar.mul(pressure));
-
-					})().compute(dispatches);
-
-				}
-
-				const getIndexedValuesFromStorage = ( readBuffer, indices ) => {
-					const nodes = [];
-					for (let i = 0; i < indices.length; i ++) {
-						nodes.push(readBuffer.element(indices[i]));
-					}
-					return nodes;
-				}
-
-				const returnColor = (r, g, b) => {
-					return vec3(r, g, b);
-				}
-
-				computeIntegration = tslFn(() => {
-
-					const velYWriteBuffer = createWriteStorage(velYStartBufferAttribute, 'float');
-					const cellIndex = getCellIndexFromInstanceIndexTSL( simCols, bufferCols );
-					velYWriteBuffer.element(cellIndex).addAssign(gravityUniform.mul(deltaTimeUniform));
-
-				})().compute(numSimCells);
-				
-
-				computeDiv_I0J0 = createDivergenceShader( 0, 0 );
-				computeDiv_I0J1 = createDivergenceShader( 0, 1 );
-				computeDiv_I1J0 = createDivergenceShader( 1, 0 );
-				computeDiv_I1J1 = createDivergenceShader( 1, 1 );
-
-				// Extrapolate velocity of buffer cells from surrounding simulation cells.
-				// Effectively a post-processing part of the divergence/outflow/incompressibility step.
-				// Shader is a bit of hack, making use of the fact that our grid dimensions are always square.
-				computeExtrapolateX = tslFn(() => {
-					const velXReadWrite = storage(velXDivergenceBufferAttribute, 'float', 1);
-
-					// Buffer cell to left of first simulation column
-					const cellLeftBufferIndex = instanceIndex.mul(bufferCols);
-					// Buffer cell to right of last simulation column
-					const cellRightBufferIndex = cellLeftBufferIndex.add(bufferCols - 1);
-
-					// Apply horizontal velocity of simulation cells to left and right buffer cells
-					const leftBufferVelocity = velXReadWrite.element(cellLeftBufferIndex);
-					leftBufferVelocity.assign(velXReadWrite.element(cellLeftBufferIndex.add(1)));
-
-					const rightBufferVelocity = velXReadWrite.element(cellRightBufferIndex);
-					rightBufferVelocity.assign(velXReadWrite.element(cellRightBufferIndex.sub(1)));
-
-				})().compute(bufferRows); 
-
-				computeExtrapolateY = tslFn(() => {
-					const velYReadWrite = storage(velYDivergenceBufferAttribute, 'float', 1);
-
-					// Buffer cell below first simulation row
-					const cellBottomBufferIndex = instanceIndex;
-					// Buffer cell above last simulation row
-					const cellTopBufferIndex = instanceIndex.add(bufferCols * bufferRows - 1);
-
-					// Apply vertical velocity of simulation cells to top and bottom buffer cells
-					const bottomBufferVelocity = velYReadWrite.element(cellBottomBufferIndex);
-					bottomBufferVelocity.assign(velYReadWrite.element(cellBottomBufferIndex.add(1)));
-
-					const topBufferVelocity = velYReadWrite.element(cellTopBufferIndex);
-					topBufferVelocity.assign(velYReadWrite.element(cellTopBufferIndex.sub(1)));
-
-				})().compute(bufferCols)
-
-
-				computeAdvection = tslFn(() => {
-
-				})
-
-
-				const storageFragmentShader = createColorOutputTSL(1.0, 0.0, 0.0);
-
-				const textureFragmentShader = tslFn(() => {
-
-					returnColor(r, g, b);
-
-				});
-
-				sceneWindTunnel = new THREE.Scene();
-
-				const geometry = new THREE.PlaneGeometry( 2, 2 );
-
-				const simWithStorageQuad = new THREE.Mesh( geometry, new MeshBasicNodeMaterial({
-					colorNode: storageFragmentShader(),
-				}));
-				sceneWindTunnel.add( simWithStorageQuad );
-
-				const simWithTextureQuad = new THREE.Mesh( geometry, new MeshBasicNodeMaterial({
-					colorNode: textureFragmentShader(),
-				}));
-				sceneWindTunnel.add( simWithTextureQuad );
-				simWithTextureQuad.visible = false;
 				
 				switchScene(currentSceneIndex);
+
+				settings = {
+					'Projection Iterations': 100,
+					'Run Projection': 2,
+					'Current Scene': 'Divergence Playground'
+				};
+
+				const gui = new GUI();
+
+				gui.add(settings, 'Projection Iterations', 50, 300).step(50);
 
 				renderer.setAnimationLoop( animate );
 
@@ -758,21 +716,45 @@
 
 			function animate() {
 
-				/* renderer.compute(currentSceneInfo.integration);
+				//renderer.compute(currentSceneInfo.integration);
 
-				for (let i = 0; i < currentSceneInfo.projectionIterations; i++) {
+				if (currentSceneInfo.computeProjection) {
+
+					for (let i = 0; i < settings[ 'Projection Iterations' ]; i++) {
+						for ( let j = 0; j < currentScene.computeProjection.length; j++ ) {
+							renderer.compute(currentSceneInfo.computeProjection[i]);
+						}
+					}
+
+				}
+
+				if (currentSceneInfo.computeExtrapolateX) {
+
+					renderer.compute(currentSceneInfo.computeExtrapolateX)
+					
+				}
+
+				if ( currentSceneInfo.computeExtrapolateY ) {
+
+					renderer.compute( currentSceneInfo.computeExtrapolateY );
+
+				}
+
+				if ( currentSceneInfo.computeE)
+
+				/* for (let i = 0; i < settings[ 'Projection Iterations' ]; i++) {
 
 					renderer.compute(currentSceneInfo.projectionI0J0);
 					renderer.compute(currentSceneInfo.projectionI0J1);
 					renderer.compute(currentSceneInfo.projectionI1J0);
 					renderer.compute(currentSceneInfo.projectionI1J1);
 
-				} 
+				} */
 
-				renderer.compute(currentSceneInfo.extrapolateX)
-				renderer.compute(currentSceneInfo.extrapolateY)
-				renderer.compute(currentSceneInfo.advectFluid)
-				renderer.compute(currentSceneInfo.advectSmoke) */
+				//renderer.compute(currentSceneInfo.extrapolateX)
+				//renderer.compute(currentSceneInfo.extrapolateY)
+				//renderer.compute(currentSceneInfo.advectFluid)
+				//renderer.compute(currentSceneInfo.advectSmoke)
 
 				renderer.render(currentScene, camera);
 
