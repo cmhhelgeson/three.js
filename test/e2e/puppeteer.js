@@ -149,6 +149,7 @@ const exceptionList = [
 	'webgpu_performance_renderbundle',
 	'webgpu_lights_rectarealight',
 	'webgpu_postprocessing',
+	'webgpu_postprocessing_outline',
 	'misc_controls_fly',
 
 	// WebGPU idleTime and parseTime too low
