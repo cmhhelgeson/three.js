@@ -2,6 +2,7 @@ import NodeMaterial, { addNodeMaterial } from './NodeMaterial.js';
 import { diffuseColor } from '../core/PropertyNode.js';
 import { directionToColor } from '../utils/PackingNode.js';
 import { materialOpacity } from '../accessors/MaterialNode.js';
+import { depth } from '../display/ViewportDepthNode.js'
 import { transformedNormalView } from '../accessors/NormalNode.js';
 import { float, vec4 } from '../shadernode/ShaderNode.js';
 
@@ -27,7 +28,7 @@ class MeshNormalNodeMaterial extends NodeMaterial {
 
 	setupDiffuseColor() {
 
-		const opacityNode = this.opacityNode ? float( this.opacityNode ) : materialOpacity;
+		diffuseColor.assign( )
 
 		diffuseColor.assign( vec4( directionToColor( transformedNormalView ), opacityNode ) );
 
