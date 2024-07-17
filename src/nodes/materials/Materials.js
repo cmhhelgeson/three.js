@@ -6,6 +6,7 @@ export { default as LineBasicNodeMaterial } from './LineBasicNodeMaterial.js';
 export { default as LineDashedNodeMaterial } from './LineDashedNodeMaterial.js';
 export { default as Line2NodeMaterial } from './Line2NodeMaterial.js';
 export { default as MeshNormalNodeMaterial } from './MeshNormalNodeMaterial.js';
+export { default as MeshDepthNodeMaterial } from './MeshDepthNodeMaterial.js';
 export { default as MeshBasicNodeMaterial } from './MeshBasicNodeMaterial.js';
 export { default as MeshLambertNodeMaterial } from './MeshLambertNodeMaterial.js';
 export { default as MeshPhongNodeMaterial } from './MeshPhongNodeMaterial.js';
