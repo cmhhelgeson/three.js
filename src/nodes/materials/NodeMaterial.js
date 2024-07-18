@@ -626,8 +626,10 @@ class NodeMaterial extends Material {
 		}
 
 		const type = material.type.replace( 'Material', 'NodeMaterial' );
-
+		
 		const nodeMaterial = createNodeMaterialFromType( type );
+
+		console.log(nodeMaterial)
 
 		if ( nodeMaterial === undefined ) {
 

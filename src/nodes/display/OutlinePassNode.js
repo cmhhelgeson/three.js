@@ -12,30 +12,30 @@ import { RenderTarget } from '../../core/RenderTarget.js';
 import { Color } from '../../math/Color.js';
 import {
 	AdditiveBlending,
-	Color,
 	DoubleSide,
-	Matrix4,
 	MeshDepthMaterial,
 	NoBlending,
 	RGBADepthPacking,
-	ShaderMaterial,
-	UniformsUtils,
 } from 'three';
-
-import { CopyShader } from '../shaders/CopyShader.js';
+import PassNode from './PassNode.js';
+import MeshBasicNodeMaterial from '../materials/MeshBasicNodeMaterial.js';
+import { BackSide, FrontSide } from '../../constants.js';
+import { DepthTexture } from '../../textures/DepthTexture.js';
 
 const _quadMesh = new QuadMesh();
 const _currentClearColor = new Color();
+const _size = new Vector2();
 
 const MAX_EDGE_THICKNESS = 4;
 const MAX_EDGE_GLOW = 4;
 
 class OutlinePassNode extends PassNode {
 
-	constructor( resolution, selectedObjects, uniformObject ) {
+	constructor( scene, camera, resolution, selectedObjects, uniformObject ) {
 
-		super();
+		super( 'color', scene, camera );
 
+		// Create resources for handling selected objects
 		this.selectedObjects = selectedObjects !== undefined ? selectedObjects : [];
 		this._visibilityCache = new Map();
 
@@ -62,67 +62,57 @@ class OutlinePassNode extends PassNode {
 		// Interal uniforms ( per Output Pass Step )
 
 		this._kernelRadius = uniform( 1.0 );
-		this._texSize = unifrom( new Vector2() )
+		this._texSize = uniform( new Vector2() )
 		this._blurDirection = uniform( new Vector2() );
+		this._textureMatrix = uniform( new Matrix4() );
 
-		this._maskRT = new RenderTarget( this.resolution.x, this.resolution.y );
-		this._maskRT.name = 'OutlineNode.mask';
-		this.renderTargetMaskBuffer.texture.generateMipmaps = false;
 
-		this.depthMaterial = new MeshDepthMaterial();
-		this.depthMaterial.side = DoubleSide;
-		this.depthMaterial.depthPacking = RGBADepthPacking;
-		this.depthMaterial.blending = NoBlending;
+		// Materials
 
-		this.prepareMaskMaterial = this.getPrepareMaskMaterial();
-		this.prepareMaskMaterial.side = DoubleSide;
-		this.prepareMaskMaterial.fragmentShader = replaceDepthToViewZ( this.prepareMaskMaterial.fragmentShader, this.renderCamera );
+		//this.prepareMaskMaterial = this.getPrepareMaskMaterial();
+		//this.prepareMaskMaterial.side = DoubleSide;
+		//this.prepareMaskMaterial.fragmentShader = replaceDepthToViewZ( this.prepareMaskMaterial.fragmentShader, this.renderCamera );
+
+
+		// Render targets 
+
+		this._nonSelectedRT = new RenderTarget( this.resolution.x, this.resolution.y );
+		this._nonSelectedRT.texture.name = 'OutlinePassNode.nonSelected_color';
+		const nonSelectedDepthTexture = new DepthTexture();
+		nonSelectedDepthTexture.name = 'OutlinePassNode.nonSelected_depth';
+		nonSelectedDepthTexture.isRenderTargetTexture = true;
+		this._nonSelectedRT.depthTexture = nonSelectedDepthTexture;
+		
+		/*this._maskRT = new RenderTarget( this.resolution.x, this.resolution.y );
+		this._maskRT.name = 'OutlinePassNode.mask';
 
 		this._maskDownSampleRT = new RenderTarget( resx, resy );
-		this._maskDownSampleRT.texture.name = 'OutlineNode.depthDownSample';
+		this._maskDownSampleRT.texture.name = 'OutlinePassNode.depthDownSample';
 
 		this._blurRT1 = new RenderTarget( resx, resy );
-		this._blurRT1.texture.name = 'OutlineNode.blur1';
+		this._blurRT1.texture.name = 'OutlinePassNode.blur1';
 		this._blurRT2 = new RenderTarget( Math.round( resx / 2 ), Math.round( resy / 2 ) );
-		this._blurRT2.texture.name = 'OutlineNode.blur2';
+		this._blurRT2.texture.name = 'OutlinePassNode.blur2';
 
 		this._edgeDetectionRT1 = new RenderTarget( resx, resy );
-		this._edgeDetectionRT.texture.name = 'OutlineNode.edge1';
+		this._edgeDetectionRT1.texture.name = 'OutlinePassNode.edge1';
 		this._edgeDetectionRT2 = new RenderTarget( Math.round( resx / 2 ), Math.round( resy / 2 ) );
-		this._edgeDetectionRT2.texture.name = 'OutlineNode.edge2';
+		this._edgeDetectionRT2.texture.name = 'OutlinePassNode.edge2'; */
 
-		this._outputRT = new RenderTarget();
+		//this._outputRT = new RenderTarget();
 		// edgeDetectionMaterialQuad
 
 		// Overlay material
-		this.overlayMaterial = this.getOverlayMaterial();
+		//this.overlayMaterial = this.getOverlayMaterial();
 
 		// copy material
 
-		const copyShader = CopyShader;
 
-		this.copyUniforms = UniformsUtils.clone( copyShader.uniforms );
-
-		this.materialCopy = new ShaderMaterial( {
-			uniforms: this.copyUniforms,
-			vertexShader: copyShader.vertexShader,
-			fragmentShader: copyShader.fragmentShader,
-			blending: NoBlending,
-			depthTest: false,
-			depthWrite: false
-		} );
-
-		this.enabled = true;
-		this.needsSwap = false;
+		//this.enabled = true;
+		//this.needsSwap = false;
 
 		this._oldClearColor = new Color();
 		this.oldClearAlpha = 1;
-
-		this.fsQuad = new FullScreenQuad( null );
-
-		this.tempPulseColor1 = new Color();
-		this.tempPulseColor2 = new Color();
-		this.textureMatrix = new Matrix4();
 
 		function replaceDepthToViewZ( string, camera ) {
 
@@ -134,28 +124,204 @@ class OutlinePassNode extends PassNode {
 
 	}
 
+	changeVisibilityOfSelectedObjects( bVisible ) {
+
+		const cache = this._visibilityCache;
+
+		function gatherSelectedMeshesCallBack( object ) {
+
+			if ( object.isMesh ) {
+
+				if ( bVisible === true ) {
+
+					object.visible = cache.get( object );
+
+				} else {
+
+					cache.set( object, object.visible );
+					object.visible = bVisible;
+
+				}
+
+			}
+
+		}
+
+		for ( let i = 0; i < this.selectedObjects.length; i ++ ) {
+
+			const selectedObject = this.selectedObjects[ i ];
+			selectedObject.traverse( gatherSelectedMeshesCallBack );
+
+		}
+
+	}
+
+	changeVisibilityOfNonSelectedObjects( bVisible ) {
+
+		const cache = this._visibilityCache;
+		const selectedMeshes = [];
+
+		function gatherSelectedMeshesCallBack( object ) {
+
+			if ( object.isMesh ) selectedMeshes.push( object );
+
+		}
+
+		for ( let i = 0; i < this.selectedObjects.length; i ++ ) {
+
+			const selectedObject = this.selectedObjects[ i ];
+			selectedObject.traverse( gatherSelectedMeshesCallBack );
+
+		}
+
+		function VisibilityChangeCallBack( object ) {
+
+			if ( object.isMesh || object.isSprite ) {
+
+				// only meshes and sprites are supported by OutlinePass
+
+				let bFound = false;
+
+				for ( let i = 0; i < selectedMeshes.length; i ++ ) {
+
+					const selectedObjectId = selectedMeshes[ i ].id;
+
+					if ( selectedObjectId === object.id ) {
+
+						bFound = true;
+						break;
+
+					}
+
+				}
+
+				if ( bFound === false ) {
+
+					const visibility = object.visible;
+
+					if ( bVisible === false || cache.get( object ) === true ) {
+
+						object.visible = bVisible;
+
+					}
+
+					cache.set( object, visibility );
+
+				}
+
+			} else if ( object.isPoints || object.isLine ) {
+
+				// the visibilty of points and lines is always set to false in order to
+				// not affect the outline computation
+
+				if ( bVisible === true ) {
+
+					object.visible = cache.get( object ); // restore
+
+				} else {
+
+					cache.set( object, object.visible );
+					object.visible = bVisible;
+
+				}
+
+			}
+
+		}
+
+		this.renderScene.traverse( VisibilityChangeCallBack );
+
+	}	
+	
+
 	updateBefore( frame ) {
+
+		// Typical PassNode setup
+
+		const { renderer } = frame;
+		const { scene, camera } = this;
+
+		this._pixelRatio = renderer.getPixelRatio();
+
+		const size = renderer.getSize( _size );
+
+		this.setSize( size.width, size.height );
+
+		const currentRenderTarget = renderer.getRenderTarget();
+		const currentMRT = renderer.getMRT();
+
+		this._cameraNear.value = camera.near;
+		this._cameraFar.value = camera.far;
+
+		// Store old clear values
+
+		renderer.getClearColor( this._oldClearColor );
+		this.oldClearAlpha = renderer.getClearAlpha();
+		const oldAutoClear = renderer.autoClear;
+
+		// Modify clear values
+
+		//renderer.autoClear = false;
+		renderer.setClearColor( 0xffffff, 1 );
+
+		// Make selected objects invisible
+
+		this.changeVisibilityOfSelectedObjects( false );
+
+		const currentBackground = this.scene.background;
+		this.scene.background = null;
+
+		const oldOverrideMaterial = this.scene.overrideMaterial;
+
+		this.scene.overrideMaterial = new MeshBasicNodeMaterial();
+		this.scene.overrideMaterial.side = DoubleSide;
+		this.scene.overrideMaterial.blending = NoBlending;
+
+		renderer.setRenderTarget( this._nonSelectedRT );
+		renderer.setMRT( this._mrt );
+
+		//renderer.autoClear = false;
+
+		renderer.render( scene, camera );
+
+		this.scene.overrideMaterial = oldOverrideMaterial;
+
+		renderer.setClearColor( this._oldClearColor, this.oldClearAlpha );
+		renderer.autoClear = oldAutoClear;
+
+		renderer.setRenderTarget( this.renderTarget );
+		renderer.setMRT( this._mrt );
+
+		renderer.render( scene, camera );
+		
+		renderer.setRenderTarget( currentRenderTarget );
+		renderer.setMRT( currentMRT );
 
 		// Necessary render setup before each pass
 
-		const { renderer } = frame;
+		/*const { renderer } = frame;
 
 		const textureNode = this.textureNode;
 		const map = textureNode.value;
 
+		// Get current value of relevant render objects
 		const currentRenderTarget = renderer.getRenderTarget();
 		const currentMRT = renderer.getMRT();
 		renderer.getClearColor( _currentClearColor );
 		const currentClearAlpha = renderer.getClearAlpha();
-
 		const currentTexture = textureNode.value;
+
+		renderer.autoClear = false;
+		renderer.setClearColor( 0xffffff, 1 ); */
+
+		//this.changeVisibilityOfSelectedObjects( false );
 
 		// 1. Draw Non Selected objects in the depth buffer
 
 		// 2. Downsample to Half resolution
 
 
-		textureNode.value = this._maskRT.texture;
+		/*textureNode.value = this._maskRT.texture;
 
 		// 3. Apply Edge Detection Pass
 
@@ -186,26 +352,33 @@ class OutlinePassNode extends PassNode {
 
 		// Blend passes additively over the input texture
 		textureNode.value = this._maskRT.texture;
-		renderer.setRenderTarget( this._outputRT );
+		renderer.setRenderTarget( this._outputRT ); */
 		
 		// Revert
-		renderer.setRenderTarget( currentTexture );
-		renderer.setMRT( currentMRT );
+		//renderer.setRenderTarget( currentTexture );
+		//renderer.setMRT( currentMRT );
 
 	}
 
 	setSize( width, height ) {
 
-		let resx = Math.round( width / this.downSampleRatio );
-		let resy = Math.round( height / this.downSampleRatio );
+		this._width = width;
+		this._height = height;
 
-		this.renderTargetMaskBuffer.setSize( width, height );
-		this.renderTargetDepthBuffer.setSize( width, height );
+		const effectiveWidth = this._width * this._pixelRatio;
+		const effectiveHeight = this._height * this._pixelRatio;
+
+		this.renderTarget.setSize( effectiveWidth, effectiveHeight );
+		this._nonSelectedRT.setSize( effectiveWidth, effectiveHeight);
+
+		/*let resx = Math.round( width / this.downSampleRatio );
+		let resy = Math.round( height / this.downSampleRatio );
+		
 		this._maskDownSampleRT.setSize( resx, resy );
 		this._blurRT1.setSize( resx, resy );
 		this._edgeDetectionRT1.setSize( resx, resy );
 		this._blurRT2.setSize( Math.round( resx / 2 ), Math.round( resy / 2 ) );
-		this._edgeDetectionRT2.setSize( Math.round( resx / 2 ), Math.round( resy / 2 ) );
+		this._edgeDetectionRT2.setSize( Math.round( resx / 2 ), Math.round( resy / 2 ) ); */
 
 	}
 
@@ -224,7 +397,7 @@ class OutlinePassNode extends PassNode {
 
 	}
 
-	setup( builder ) {
+	/* setup( builder ) {
 
 		// TSL Utility Functions
 		gaussianPdf = ( x, sigma ) => {
@@ -317,18 +490,20 @@ class OutlinePassNode extends PassNode {
 		// material.blending = AdditiveBlending
 		// material.transparent = true;
 
-		});
+		}); 
 
-	}
+		const color = super.getTextureNode( 'output' );
+
+		return color;
+
+	}  */
 
 }
 
-OutlinePass.BlurDirectionX = new Vector2( 1.0, 0.0 );
-OutlinePass.BlurDirectionY = new Vector2( 0.0, 1.0 );
+OutlinePassNode.BlurDirectionX = new Vector2( 1.0, 0.0 );
+OutlinePassNode.BlurDirectionY = new Vector2( 0.0, 1.0 );
 
-export { OutlinePass };
-
-export const outlinePass = ( node, directionNode, sigma ) => nodeObject( new GaussianBlurNode( nodeObject( node ).toTexture(), directionNode, sigma ) );
+export const outlinePass = ( scene, camera, resolution, selectedObjects, uniformObject ) => nodeObject( new OutlinePassNode( scene, camera, resolution, selectedObjects, uniformObject ) );
 
 addNodeElement( 'outlinePass', outlinePass );
 
