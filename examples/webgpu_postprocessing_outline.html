@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 	<head>
-		<title>three.js webgl - post processing - Outline Pass</title>
+		<title>three.js webgpu - post processing - Outline Pass</title>
 		<meta charset="utf-8">
 		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
 		<link type="text/css" rel="stylesheet" href="main.css">
@@ -27,14 +27,14 @@
 
 			import Stats from 'three/addons/libs/stats.module.js';
 			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
-			import { pass, texture3D, uniform, renderOutput } from 'three/tsl';
+			import { pass, texture3D, uniform, renderOutput, outlinePass } from 'three/tsl';
 
 			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 			import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 
 			let container, stats;
-			let camera, scene, renderer, controls;
-			let composer, effectFXAA, outlinePass;
+			let camera, scene, renderer, controls, outlineRenderPass;
+			let postProcessing, effectFXAA;
 
 			const dummy = new THREE.Object3D();
 
@@ -59,7 +59,7 @@
 
 			const gui = new GUI( { width: 280 } );
 
-			gui.add( params, 'edgeStrength', 0.01, 10 ).onChange( function ( value ) {
+			/* gui.add( params, 'edgeStrength', 0.01, 10 ).onChange( function ( value ) {
 
 				outlinePass.edgeStrength = Number( value );
 
@@ -89,7 +89,7 @@
 
 				outlinePass.usePatternTexture = value;
 
-			} );
+			} ); */
 
 			function Configuration() {
 
@@ -100,7 +100,7 @@
 
 			const conf = new Configuration();
 
-			gui.addColor( conf, 'visibleEdgeColor' ).onChange( function ( value ) {
+			/* gui.addColor( conf, 'visibleEdgeColor' ).onChange( function ( value ) {
 
 				outlinePass.visibleEdgeColor.set( value );
 
@@ -110,7 +110,7 @@
 
 				outlinePass.hiddenEdgeColor.set( value );
 
-			} );
+			} ); */
 
 			init();
 
@@ -239,10 +239,10 @@
 
 				// postprocessing
 
-				composer = new THREE.PostProcessing( renderer );
+				postProcessing = new THREE.PostProcessing( renderer );
 
-				const renderPass = pass( scene, camera )
-				composer.outputNode = renderPass;
+				outlineRenderPass = outlinePass( scene, camera, new THREE.Vector2( window.innerWidth, window.innerHeight ), undefined, {} )
+				postProcessing.outputNode = outlineRenderPass;
 
 				const textureLoader = new THREE.TextureLoader();
 				textureLoader.load( 'textures/tri_pattern.jpg', function ( texture ) {
@@ -281,17 +281,16 @@
 					raycaster.setFromCamera( mouse, camera );
 
 					const intersects = raycaster.intersectObject( scene, true );
-					console.log(intersects)
 
 					if ( intersects.length > 0 ) {
 
 						const selectedObject = intersects[ 0 ].object;
 						addSelectedObject( selectedObject );
-						//outlinePass.selectedObjects = selectedObjects;
+						outlineRenderPass.selectedObjects = selectedObjects;
 
 					} else {
 
-						// outlinePass.selectedObjects = [];
+						outlineRenderPass.selectedObjects = [];
 
 					}
 
@@ -308,7 +307,6 @@
 				camera.updateProjectionMatrix();
 
 				renderer.setSize( width, height );
-				composer.setSize( width, height );
 
 			}
 
@@ -326,7 +324,7 @@
 
 				controls.update();
 
-				composer.render();
+				postProcessing.render();
 
 				stats.end();
 
