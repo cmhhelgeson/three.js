@@ -241,7 +241,7 @@
 
 				postProcessing = new THREE.PostProcessing( renderer );
 
-				outlineRenderPass = outlinePass( scene, camera, new THREE.Vector2( window.innerWidth, window.innerHeight ), undefined, {} )
+				outlineRenderPass = outlinePass( scene, camera, new THREE.Vector2( window.innerWidth, window.innerHeight ), undefined, {} );
 				postProcessing.outputNode = outlineRenderPass;
 
 				const textureLoader = new THREE.TextureLoader();
@@ -251,7 +251,7 @@
 					texture.wrapS = THREE.RepeatWrapping;
 					texture.wrapT = THREE.RepeatWrapping;
 
-				} ); 
+				} );
 
 				window.addEventListener( 'resize', onWindowResize );
 
