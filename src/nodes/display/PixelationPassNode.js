@@ -190,7 +190,7 @@ class PixelationPassNode extends PassNode {
 		const depth = super.getTextureNode( 'depth' );
 		const normal = super.getTextureNode( 'normal' );
 
-		return pixelation( color, depth, normal, this.pixelSize, this.normalEdgeStrength, this.depthEdgeStrength );
+		return depth; //( color, depth, normal, this.pixelSize, this.normalEdgeStrength, this.depthEdgeStrength );
 
 	}
 

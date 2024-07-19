@@ -13,6 +13,8 @@ class ViewportDepthNode extends Node {
 		this.scope = scope;
 		this.valueNode = valueNode;
 
+		console.log( this.valueNode );
+
 		this.isViewportDepthNode = true;
 
 	}

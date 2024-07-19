@@ -48,6 +48,7 @@ class GaussianBlurNode extends TempNode {
 		height = Math.max( Math.round( height * this.resolution.y ), 1 );
 
 		this._invSize.value.set( 1 / width, 1 / height );
+		console.log( this._invSize.value );
 		this._horizontalRT.setSize( width, height );
 		this._verticalRT.setSize( width, height );
 
