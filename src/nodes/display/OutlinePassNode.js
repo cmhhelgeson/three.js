@@ -314,8 +314,9 @@ class OutlinePassNode extends PassNode {
 
 		console.log( this._textures );
 
-		const color = super.getLinearDepthNode( 'OutlinePassNode.nonSelected_depth' );
-		return color;
+		const depthColor2 = super.getLinearDepthNode( 'depth' );
+		//const depthColor1 = super.getLinearDepthNode( 'OutlinePassNode.nonSelected_depth' );
+		return depthColor2;
 
 	}
 
