@@ -8,16 +8,17 @@ import { Color } from '../../math/Color.js';
 import PassNode, { passTexture } from './PassNode.js';
 import { DepthTexture } from '../../textures/DepthTexture.js';
 import { NodeUpdateType } from '../core/constants.js';
-import { linearDepth } from './ViewportDepthNode.js';
+import { linearDepth, perspectiveDepthToViewZ } from './ViewportDepthNode.js';
 import { varying } from '../core/VaryingNode.js';
-import { modelWorldMatrix, modelViewPosition } from '../accessors/ModelNode.js';
-IMPORT { model}
+import { varyingProperty } from '../core/PropertyNode.js';
+import { modelWorldMatrix, modelViewPosition, modelViewMatrix } from '../accessors/ModelNode.js';
+import { cameraProjectionMatrix } from '../accessors/CameraNode.js';
+import { positionLocal, positionGeometry } from '../accessors/PositionNode.js';
 
 import { FloatType } from '../../constants.js';
 import { uniform } from '../core/UniformNode.js';
 import { Vector2 } from '../../math/Vector2.js';
 import { Matrix4 } from '../../math/Matrix4.js';
-import { positionLocal, varyingProperty } from '../Nodes.js';
 
 const _quadMesh = new QuadMesh();
 const _currentClearColor = new Color();
@@ -69,7 +70,7 @@ class OutlinePassNode extends PassNode {
 
 		this._nonSelectedRT = new RenderTarget();
 		this._nonSelectedRT.texture.name = 'OutlinePassNode.nonSelected_color';
-		this._textures[ this._nonSelectedRT.texture.name ] = this._nonSelectedRT;
+		this._textures[ this._nonSelectedRT.texture.name ] = this._nonSelectedRT.texture;
 		this.renderTarget.depthTexture.type = FloatType;
 
 		const nonSelectedDepthTexture = new DepthTexture();
@@ -198,10 +199,13 @@ class OutlinePassNode extends PassNode {
 
 	updateTextureMatrix() {
 
+		// Unlike the WebGL OutlinePass, NDC z-coordinates are already scaled to a [0, 1] range,
+		// and thus are retained in the transformation from NDC-coordinates to texture coordinates.
+
 		this._textureMatrix.value.set(
 			0.5, 0.0, 0.0, 0.5,
 			0.0, 0.5, 0.0, 0.5,
-			0.0, 0.0, 0.5, 0.5,
+			0.0, 0.0, 1.0, 0.0,
 			0.0, 0.0, 0.0, 1.0
 		);
 		this._textureMatrix.value.multiply( this.camera.projectionMatrix );
@@ -247,7 +251,6 @@ class OutlinePassNode extends PassNode {
 
 		renderer.setRenderTarget( this._nonSelectedRT );
 		renderer.setMRT( null );
-
 		renderer.render( scene, camera );
 
 		// 2. Draw selected objects in the depth buffer
@@ -272,6 +275,8 @@ class OutlinePassNode extends PassNode {
 		// Make non selected objects visible, revert scene override material and background
 		this.changeVisibilityOfNonSelectedObjects( true );
 		this._visibilityCache.clear();
+
+		this.scene.overrideMaterial = oldSceneOverrideMaterial;
 
 		renderer.setClearColor( this._oldClearColor, this.oldClearAlpha );
 		renderer.autoClear = oldAutoClear;
@@ -298,24 +303,18 @@ class OutlinePassNode extends PassNode {
 
 		this._prepareMaskMaterial = this._prepareMaskMaterial || builder.createNodeMaterial();
 
-		this._prepareMaskMaterial.vertexNode = tslFn( () => {
+		const prepareMaskVertexTSL = tslFn( () => {
 
-			varyingProperty( 'vec4', 'vPosition').assign( vec4( modelViewPosition, 1.0 ) );
-			varyingProperty( 'vec4', 'vProjTexCoord' ).assign( this._textureMatrix.mul( modelWorldMatrix.mul( positionLocal ) ) );
-
-			return positionLocal;
+			return cameraProjectionMatrix.mul( modelViewMatrix ).mul( positionGeometry );
 
 		} );
 
-		this._prepareMaskMaterial.fragmentNode = tslFn(() => {
+		this._prepareMaskMaterial.positionNode = prepareMaskVertexTSL();
+		this._prepareMaskMaterial.needsUpdate = true;
 
-			const vPosition = varyingProperty( 'vec4', 'vPosition' );
-			const vProjTexCoord = varyingProperty( 'vec4', 'vProjTexCoord' );
+		console.log( this._textures );
 
-		})
-		this._prepareMaskMaterial.fragmentNode = compositePass().context( builder.getSharedContext() );
-		this._compositeMaterial.needsUpdate = true;
-		const color = super.getTextureNode( 'output' );
+		const color = super.getLinearDepthNode( 'OutlinePassNode.nonSelected_depth' );
 		return color;
 
 	}
