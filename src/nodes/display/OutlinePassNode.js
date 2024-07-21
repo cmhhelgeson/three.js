@@ -1,5 +1,5 @@
 import TempNode from '../core/TempNode.js';
-import { texture, textureLoad } from '../accessors/TextureNode.js';
+import TextureNode, { texture, textureLoad } from '../accessors/TextureNode.js';
 import { uv } from '../accessors/UVNode.js';
 import { addNodeElement, nodeObject, tslFn, vec2, vec3, vec4, float, If } from '../shadernode/ShaderNode.js';
 import QuadMesh from '../../renderers/common/QuadMesh.js';
@@ -14,8 +14,11 @@ import { varyingProperty } from '../core/PropertyNode.js';
 import { modelWorldMatrix, modelViewPosition, modelViewMatrix } from '../accessors/ModelNode.js';
 import { cameraProjectionMatrix } from '../accessors/CameraNode.js';
 import { positionLocal, positionGeometry } from '../accessors/PositionNode.js';
+import { modelViewProjection } from '../accessors/ModelViewProjectionNode.js';
+import { negate } from '../math/MathNode.js';
+import { MeshBasicNodeMaterial } from '../materials/Materials.js';
+import { addNodeClass } from '../core/Node.js';
 
-import { FloatType } from '../../constants.js';
 import { uniform } from '../core/UniformNode.js';
 import { Vector2 } from '../../math/Vector2.js';
 import { Matrix4 } from '../../math/Matrix4.js';
@@ -27,6 +30,8 @@ const _size = new Vector2();
 
 const MAX_EDGE_THICKNESS = 4;
 const MAX_EDGE_GLOW = 4;
+
+const NODE_ID = 'OutlinePassNode';
 
 class OutlinePassNode extends PassNode {
 
@@ -41,8 +46,8 @@ class OutlinePassNode extends PassNode {
 
 		this.resolution = ( resolution !== undefined ) ? new Vector2( resolution.x, resolution.y ) : new Vector2( 256, 256 );
 
-		const resx = Math.round( this.resolution.x / this.downSampleRatio );
-		const resy = Math.round( this.resolution.y / this.downSampleRatio );
+		// Materials
+		this._prepareMaskMaterial = null;
 
 		// User-adjusted uniforms
 
@@ -67,24 +72,40 @@ class OutlinePassNode extends PassNode {
 		this._textureMatrix = uniform( new Matrix4() );
 
 		// Render targets
-
-		this._nonSelectedRT = new RenderTarget();
-		this._nonSelectedRT.texture.name = 'OutlinePassNode.nonSelected_color';
-		this._textures[ this._nonSelectedRT.texture.name ] = this._nonSelectedRT.texture;
-		this.renderTarget.depthTexture.type = FloatType;
-
-		const nonSelectedDepthTexture = new DepthTexture();
-		nonSelectedDepthTexture.name = 'OutlinePassNode.nonSelected_depth';
-		nonSelectedDepthTexture.isRenderTargetTexture = true;
-		this._nonSelectedRT.depthTexture = nonSelectedDepthTexture;
-		this._textures[ this._nonSelectedRT.depthTexture.name ] = this._nonSelectedRT.depthTexture;
+		this._nonSelectedRT = this.createOutlinePassTarget( 'nonSelectedDepth' );
+		this._prepareMaskRT = this.createOutlinePassTarget( 'prepareMask' );
+		this._maskDownSampleRT = this.createOutlinePassTarget( 'maskDownSamplePass' );
+		this._edge1RT = this.createOutlinePassTarget( 'edge1' );
+		this._blur1RT = this.createOutlinePassTarget( 'blurOne' );
+		this._edge2RT = this.createOutlinePassTarget( 'edgeTwo' );
+		this._blur2RT = this.createOutlinePassTarget( 'blurTwo' );
 
 		// Revert render state objects
 		this._oldClearColor = new Color();
 		this.oldClearAlpha = 1;
 
+		// Shader setup vars
+		this.textureNode = new TextureNode();
+		this.depthTextureNode = new TextureNode();
+
 		this._returnTexture = passTexture( this, this._nonSelectedRT.texture );
 
+
+	}
+
+	createOutlinePassTarget( name ) {
+
+		const rt = new RenderTarget();
+		rt.texture.name = `${NODE_ID}.${name}_color`;
+		this._textures[ rt.texture.name ] = rt.texture;
+
+		const dt = new DepthTexture();
+		dt.name = `${NODE_ID}.${name}_depth`;
+		dt.isRenderTargetTexture = true;
+		rt.depthTexture = dt;
+		this._textures[ rt.depthTexture.name ] = rt.depthTexture;
+
+		return rt;
 
 	}
 
@@ -197,11 +218,11 @@ class OutlinePassNode extends PassNode {
 
 	}
 
+	// Create matrix that transforms world positions to texture coordinates
 	updateTextureMatrix() {
 
 		// Unlike the WebGL OutlinePass, NDC z-coordinates are already scaled to a [0, 1] range,
 		// and thus are retained in the transformation from NDC-coordinates to texture coordinates.
-
 		this._textureMatrix.value.set(
 			0.5, 0.0, 0.0, 0.5,
 			0.0, 0.5, 0.0, 0.5,
@@ -227,6 +248,10 @@ class OutlinePassNode extends PassNode {
 
 		this.setSize( size.width, size.height );
 
+		const textureNode = this.textureNode;
+		const currentTexture = textureNode.value;
+		const depthTextureNode = this.depthTextureNode;
+		const currentDepthTexture = depthTextureNode.value;
 		const currentRenderTarget = renderer.getRenderTarget();
 		const currentMRT = renderer.getMRT();
 
@@ -264,12 +289,13 @@ class OutlinePassNode extends PassNode {
 
 		// Apply prepare mask material to scene
 		const oldSceneOverrideMaterial = this.scene.overrideMaterial;
-		//this.scene.overrideMaterial = this._prepareMaskMaterial;
+		this.scene.overrideMaterial = this._prepareMaskMaterial;
 
 		// Make non selected objects invisible, and draw only the selected objects, by comparing the depth buffer of non selected objects
 		this.changeVisibilityOfNonSelectedObjects( false );
-		renderer.setRenderTarget( this.renderTarget );
-		renderer.setMRT( this._mrt );
+		textureNode.value = this._nonSelectedRT.value;
+		depthTextureNode.value = this._nonSelectedRT.depthTexture.value;
+		renderer.setRenderTarget( this._prepareMaskRT );
 		renderer.render( scene, camera );
 
 		// Make non selected objects visible, revert scene override material and background
@@ -278,8 +304,12 @@ class OutlinePassNode extends PassNode {
 
 		this.scene.overrideMaterial = oldSceneOverrideMaterial;
 
+		// Reset extant render state
 		renderer.setClearColor( this._oldClearColor, this.oldClearAlpha );
 		renderer.autoClear = oldAutoClear;
+
+		textureNode.value = currentTexture;
+		depthTextureNode.value = currentDepthTexture;
 
 		renderer.setRenderTarget( currentRenderTarget );
 		renderer.setMRT( currentMRT );
@@ -296,27 +326,78 @@ class OutlinePassNode extends PassNode {
 
 		this.renderTarget.setSize( effectiveWidth, effectiveHeight );
 		this._nonSelectedRT.setSize( effectiveWidth, effectiveHeight );
+		this._prepareMaskRT.setSize( effectiveWidth, effectiveHeight );
+
+		let resx = Math.round( effectiveWidth / this.downSampleRatio );
+		let resy = Math.round( effectiveHeight / this.downSampleRatio );
+		this._maskDownSampleRT.setSize( resx, resy );
+		this._blur1RT.setSize( resx, resy );
+		this._edge1RT.setSize( resx, resy );
+		this._texSize.value.set( resx, resy );
+
+		resx = Math.round( resx / 2 );
+		resy = Math.round( resy / 2 );
+
+		this._blur2RT.setSize( resx, resy );
+		this._edge2RT.setSize( resx, resy );
+
+	}
+
+	dispose() {
+
+		this._blur1RT.dispose();
+		this._blur2RT.dispose();
+		this._edge1RT.dispose();
+		this._edge2RT.dispose();
+		this._maskDownSampleRT.dispose();
+		this._prepareMaskRT.dispose();
+		this._nonSelectedRT.dispose();
 
 	}
 
 	setup( builder ) {
 
-		this._prepareMaskMaterial = this._prepareMaskMaterial || builder.createNodeMaterial();
+		//const { textureNode, depthTextureNode } = this;
+		//console.log( depthTextureNode );
+
+		this._prepareMaskMaterial = this._prepareMaskMaterial || new MeshBasicNodeMaterial();
+
+		const vTexturePos = varyingProperty( 'vec4', 'vTexturePos' );
 
 		const prepareMaskVertexTSL = tslFn( () => {
 
-			return cameraProjectionMatrix.mul( modelViewMatrix ).mul( positionGeometry );
+			vTexturePos.assign( this._textureMatrix.mul( positionLocal ) );
+
+			return modelViewProjection;
 
 		} );
 
-		this._prepareMaskMaterial.positionNode = prepareMaskVertexTSL();
+		//const nonSelectedDepthNode = super.getTextureNode( this._nonSelectedRT.depthTexture.name );
+
+		const prepareMaskFragmentTSL = tslFn( () => {
+
+			return vec4( 0.0, 1.0, 0.0, 1.0 );
+
+			const projCoord = vTexturePos.xy.div( vTexturePos.z );
+
+			const depth = depthTextureNode.uv( projCoord );
+
+			// TODO: Check if orthographic depth
+			const nonSelectedViewZ = perspectiveDepthToViewZ( depth, this._cameraNear, this._cameraFar );
+			const depthTest = negate( modelViewPosition.z ).greaterThan( nonSelectedViewZ ).cond( 1.0, 0.0 );
+			return vec4( 0.0, depthTest, 0.0, 1.0 );
+
+		} );
+
+		this._prepareMaskMaterial.vertexNode = prepareMaskVertexTSL().context( builder.getSharedContext() );
+		this._prepareMaskMaterial.colorNode = prepareMaskFragmentTSL().context( builder.getSharedContext() );
 		this._prepareMaskMaterial.needsUpdate = true;
 
-		console.log( this._textures );
+		//const properties = builder.getNodeProperties( this );
+		//properties.textureNode = this.textureNode;
+		//properties.depthTextureNode = this.depthTextureNode;
 
-		const depthColor2 = super.getLinearDepthNode( 'depth' );
-		//const depthColor1 = super.getLinearDepthNode( 'OutlinePassNode.nonSelected_depth' );
-		return depthColor2;
+		return super.getTextureNode( this._prepareMaskRT.texture.name );
 
 	}
 
@@ -327,3 +408,5 @@ export const outlinePass = ( scene, camera, resolution, selectedObjects, uniform
 addNodeElement( 'outlinePass', outlinePass );
 
 export default OutlinePassNode;
+
+addNodeClass( 'OutlinePassNode', OutlinePassNode );
