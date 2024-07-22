@@ -381,14 +381,9 @@
 		"webgpu_postprocessing_dof",
 		"webgpu_postprocessing_pixel",
 		"webgpu_postprocessing_fxaa",
-<<<<<<< HEAD
-<<<<<<< HEAD
 		"webgpu_postprocessing_masking",
-=======
 		"webgpu_postprocessing_outline",
->>>>>>> 715bf49981 (setup pass node)
-=======
->>>>>>> c75f7096dd (fix files.json)
+		"webgpu_postprocessing_outline",
 		"webgpu_postprocessing_sobel",
 		"webgpu_postprocessing_transition",
 		"webgpu_postprocessing_outline",
