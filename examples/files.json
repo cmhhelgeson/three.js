@@ -381,7 +381,11 @@
 		"webgpu_postprocessing_dof",
 		"webgpu_postprocessing_pixel",
 		"webgpu_postprocessing_fxaa",
+<<<<<<< HEAD
 		"webgpu_postprocessing_masking",
+=======
+		"webgpu_postprocessing_outline",
+>>>>>>> 715bf49981 (setup pass node)
 		"webgpu_postprocessing_sobel",
 		"webgpu_postprocessing_transition",
 		"webgpu_postprocessing",
