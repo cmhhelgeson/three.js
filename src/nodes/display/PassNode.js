@@ -158,6 +158,7 @@ class PassNode extends TempNode {
 	getTextureNode( name = 'output' ) {
 
 		let textureNode = this._textureNodes[ name ];
+		console.log( name );
 
 		if ( textureNode === undefined ) {
 
