@@ -8,22 +8,13 @@ import { Color } from '../../math/Color.js';
 import PassNode, { passTexture } from './PassNode.js';
 import { DepthTexture } from '../../textures/DepthTexture.js';
 import { NodeUpdateType } from '../core/constants.js';
-import { linearDepth, perspectiveDepthToViewZ } from './ViewportDepthNode.js';
-import { varying } from '../core/VaryingNode.js';
-import { varyingProperty } from '../core/PropertyNode.js';
-import { modelWorldMatrix, modelViewPosition, modelViewMatrix } from '../accessors/ModelNode.js';
-import { cameraProjectionMatrix } from '../accessors/CameraNode.js';
-import { positionLocal, positionGeometry } from '../accessors/PositionNode.js';
-import { modelViewProjection } from '../accessors/ModelViewProjectionNode.js';
-import { negate } from '../math/MathNode.js';
-import { MeshBasicNodeMaterial } from '../materials/Materials.js';
+import { perspectiveDepthToViewZ } from './ViewportDepthNode.js';
 import { addNodeClass } from '../core/Node.js';
 
 import { uniform } from '../core/UniformNode.js';
 import { Vector2 } from '../../math/Vector2.js';
 import { Matrix4 } from '../../math/Matrix4.js';
 
-const _quadMesh = new QuadMesh();
 const _prepareMaskQuad = new QuadMesh();
 const _maskDownSampleQuad = new QuadMesh();
 const _edge1Quad = new QuadMesh();
@@ -31,60 +22,168 @@ const _blur1Quad = new QuadMesh();
 const _edge2Quad = new QuadMesh();
 const _blur2Quad = new QuadMesh();
 const _currentClearColor = new Color();
-const _debugQuadMesh = new QuadMesh();
 const _size = new Vector2();
 
 const MAX_EDGE_THICKNESS = 4;
 const MAX_EDGE_GLOW = 4;
 
-const NODE_ID = 'OutlinePassNode';
+const OUTLINE_PASS_NODE_ID = 'OutlinePassNode';
+const OUTLINE_NODE_ID = 'OutlineNode';
 
 class OutlineNode extends TempNode {
 
-	constructor( nonSelectedColor, nonSelectedDepth, selectedColor, selectedDepth ) {
+	constructor( nsColor, nsDepth, sColor, sDepth, uniformObject ) {
 
 		super();
 
-		this.nonSelectedColorNode = nonSelectedColor;
-		this.selectedColorNode = selectedColor;
-		this.nonSelectedDepthNode = nonSelectedDepth;
-		this.selectedDepthNode = selectedDepth;
+		// Texture Nodes
+		this.nsColorNode = nsColor;
+		this.sColorNode = sColor;
+		this.nsDepthNode = nsDepth;
+		this.sDepthNode = sDepth;
 
-		console.log( this );
+		// External uniforms
+		this.visibleEdgeColor = uniformObject.visibleEdgeColor || vec3( 1, 1, 1 );
+		this.hiddenEdgeColor = uniformObject.hiddenEdgeColor || vec3( 0.1, 0.04, 0.02 );
+		this.edgeGlow = uniformObject.edgeGlow || 0.0;
+		this.usePatternTexture = uniformObject.usePatternTexture || 0;
+		this.edgeThickness = uniformObject.edgeThickness || 1.0;
+		this.edgeStrength = uniformObject.edgeStrength || 3.0;
+		this.downSampleRatio = uniformObject.downSampleRatio || 2;
+		this.pulsePeriod = uniformObject.pulsePeriod || 0;
+
+		// Internal uniforms ( Global )
+		this._cameraNear = uniformObject.cameraNear;
+		this._cameraFar = uniformObject.cameraFar;
+
+		// Internal uniforms ( per Output Pass )
+		this._invSize = uniform( vec2( 0.5, 0.5 ) );
+
+		// Interal uniforms ( per Output Pass Step )
+		this._kernelRadius = uniform( 1.0 );
+		this._texSize = uniform( new Vector2() );
+		this._blurDirection = uniform( new Vector2() );
+
+		// Render Targets
+		this._prepareMaskRT = this.createOutlinePassNodeTarget( 'prepareMask', false );
+		this._maskDownSampleRT = this.createOutlinePassNodeTarget( 'maskDownSamplePass', false );
+		this._edge1RT = this.createOutlinePassNodeTarget( 'edge1' );
+		this._blur1RT = this.createOutlinePassNodeTarget( 'blurOne' );
+		this._edge2RT = this.createOutlinePassNodeTarget( 'edgeTwo' );
+		this._blur2RT = this.createOutlinePassNodeTarget( 'blurTwo' );
+
+		this._returnTextureNode = passTexture( this, this._prepareMaskRT.texture );
 
 	}
 
-	setup() {
+	createOutlineNodeTarget( name, depthWrite = true ) {
 
-		const { nonSelectedColorNode, selectedColorNode, nonSelectedDepthNode, selectedDepthNode } = this;
 
-		const nonSelectedDepthUV = nonSelectedDepthNode.uvNode || uv();
-		const selectedDepthUV = selectedDepthNode.uvNode || uv();
+	}
 
-		//const sampleNonSelectedDepth = () => nonSelectedDepthNode.uv( nonSelectedUV );
-		//const sampleSelectedDepth = () => selectedDepthNode.uv( selectedUV );
+	updateBefore( frame ) {
+
+		const { renderer } = frame;
+
+		const map = this.sColorNode.value;
+
+		const currentRenderTarget = renderer.getRenderTarget();
+		const currentMRT = renderer.getMRT();
+
+		_prepareMaskQuad.material = this._perpareMaskMaterial;
+
+		this.setSize( map.image.width, map.image.height );
+
+		const textureType = map.type;
+
+		this._prepareMaskRT.texture.type = textureType;
+		this._verticalRT.texture.type = textureType;
+		this._maskDownSampleRT.texture.type = textureType;
+		this._edge1RT.texture.type = textureType;
+		this._blur1RT.texture.type = textureType;
+		this._edge2RT.texture.type = textureType;
+		this._blur2RT.texture.type = textureType;
+
+		// clear
+
+		renderer.setMRT( null );
+
+		// RENDER PASSES
+
+		// 3. Prepare mask by comparing depth of selected and non-selected depth buffers
+		renderer.setRenderTarget( this._preareMaskRT );
+		this._prepareMaskQuad.render( renderer );
+
+		// restore
+
+		renderer.setRenderTarget( currentRenderTarget );
+		renderer.setMRT( currentMRT );
+
+	}
+
+	setSize( width, height ) {
+
+		this._width = width;
+		this._height = height;
+
+		const effectiveWidth = this._width * this._pixelRatio;
+		const effectiveHeight = this._height * this._pixelRatio;
+
+		this._prepareMaskRT.setSize( effectiveWidth, effectiveHeight );
+
+		let resx = Math.round( effectiveWidth / this.downSampleRatio );
+		let resy = Math.round( effectiveHeight / this.downSampleRatio );
+		this._maskDownSampleRT.setSize( resx, resy );
+		this._blur1RT.setSize( resx, resy );
+		this._edge1RT.setSize( resx, resy );
+		this._texSize.value.set( resx, resy );
+
+		resx = Math.round( resx / 2 );
+		resy = Math.round( resy / 2 );
+
+		this._blur2RT.setSize( resx, resy );
+		this._edge2RT.setSize( resx, resy );
+
+	}
+
+	dispose() {
+
+		this._prepareMaskRT.dispose();
+		this._maskDownSampleRT.dispose();
+		this._blur1RT.dispose();
+		this._blur2RT.dispose();
+		this._edge1RT.dispose();
+		this._edge2RT.dispose();
+
+	}
+
+	setup( builder ) {
+
+		const nsColorNode = this.nsColorNode;
+		const sColorNode = this.sColorNode;
+		const nsDepthNode = this.nsDepthNode;
+		const sDepthNode = this.sDepthNode;
 
 		const prepareMask = tslFn( () => {
 
-			const nonSelectedDepth = nonSelectedDepthNode.uv( nonSelectedDepthUV ).x;
-			const selectedDepth = selectedDepthNode.uv( selectedDepthUV ).x;
-
-			const nonSelectedViewZ = perspectiveDepthToViewZ( nonSelectedDepth, this._cameraNear, this._cameraFar );
-			const selectedViewZ = perspectiveDepthToViewZ( selectedDepth, this._cameraNear, this._cameraFar );
-			const depthTest = negate( selectedViewZ ).greaterThan( nonSelectedViewZ ).cond( 1.0, 0.0 );
+			const nonSelectedViewZ = perspectiveDepthToViewZ( nsDepthNode, this._cameraNear, this._cameraFar );
+			const selectedViewZ = perspectiveDepthToViewZ( sDepthNode, this._cameraNear, this._cameraFar );
+			const depthTest = selectedViewZ.greaterThan( nonSelectedViewZ ).cond( 1.0, 0.0 );
 			return vec4( 0.0, depthTest, 0.0, 1.0 );
 
 		} );
 
-		const outputNode = prepareMask();
+		this._prepareMaskMaterial = this._prepareMaskMaterial || builder.createNodeMaterial();
+		this._prepareMaskMaterial.fragmentNode = prepareMask();
+		this._prepareMaskMaterial.needsUpdate = true;
 
-		return outputNode;
+		return this._returnTextureNode;
 
 	}
 
 }
 
-export const outline = ( nsColor, nsDepth, sColor, sDepth ) => nodeObject( new OutlineNode( nsColor, nsDepth, sColor, sDepth ) );
+export const outline = ( nsColor, nsDepth, sColor, sDepth, cameraNear, cameraFar ) => nodeObject( new OutlineNode( nsColor, nsDepth, sColor, sDepth, cameraNear, cameraFar ) );
 addNodeElement( 'outline', outline );
 
 class OutlinePassNode extends PassNode {
@@ -100,11 +199,6 @@ class OutlinePassNode extends PassNode {
 
 		this.resolution = ( resolution !== undefined ) ? new Vector2( resolution.x, resolution.y ) : new Vector2( 256, 256 );
 
-		// Materials
-		this._prepareMaskMaterial = null;
-
-		// User-adjusted uniforms
-
 		this.visibleEdgeColor = uniformObject.visibleEdgeColor || vec3( 1, 1, 1 );
 		this.hiddenEdgeColor = uniformObject.hiddenEdgeColor || vec3( 0.1, 0.04, 0.02 );
 		this.edgeGlow = uniformObject.edgeGlow || 0.0;
@@ -114,46 +208,29 @@ class OutlinePassNode extends PassNode {
 		this.downSampleRatio = uniformObject.downSampleRatio || 2;
 		this.pulsePeriod = uniformObject.pulsePeriod || 0;
 
-		// Internal uniforms ( per Output Pass )
-
-		this._invSize = uniform( vec2( 0.5, 0.5 ) );
-
-		// Interal uniforms ( per Output Pass Step )
-
-		this._kernelRadius = uniform( 1.0 );
-		this._texSize = uniform( new Vector2() );
-		this._blurDirection = uniform( new Vector2() );
+		// TODO: Determine whether this is needed
 		this._textureMatrix = uniform( new Matrix4() );
 
 		// Render targets
-		this._nonSelectedRT = this.createOutlinePassTarget( 'nonSelectedDepth' );
-		this._selectedRT = this.createOutlinePassTarget( 'selectedDepth' );
-		this._prepareMaskRT = this.createOutlinePassTarget( 'prepareMask', false );
-		this._maskDownSampleRT = this.createOutlinePassTarget( 'maskDownSamplePass', false );
-		this._edge1RT = this.createOutlinePassTarget( 'edge1' );
-		this._blur1RT = this.createOutlinePassTarget( 'blurOne' );
-		this._edge2RT = this.createOutlinePassTarget( 'edgeTwo' );
-		this._blur2RT = this.createOutlinePassTarget( 'blurTwo' );
+		this._nonSelectedRT = this.createOutlinePassNodeTarget( 'nonSelectedDepth' );
+		this._selectedRT = this.createOutlinePassNodeTarget( 'selectedDepth' );
 
 		// Revert render state objects
 		this._oldClearColor = new Color();
 		this.oldClearAlpha = 1;
 
-		this._nonSelectedDepthTexture = passTexture( this, this._prepareMaskRT.depthTexture );
-		this._selectedDepthTexture = passTexture( this, this._selectedRT.depthTexture );
-
 	}
 
-	createOutlinePassTarget( name, depthWrite = true ) {
+	createOutlinePassNodeTarget( name, depthWrite = true ) {
 
 		const rt = new RenderTarget();
-		rt.texture.name = `${NODE_ID}.${name}_color`;
+		rt.texture.name = `${OUTLINE_PASS_NODE_ID}.${name}_color`;
 		this._textures[ rt.texture.name ] = rt.texture;
 
 		if ( depthWrite ) {
 
 			const dt = new DepthTexture();
-			dt.name = `${NODE_ID}.${name}_depth`;
+			dt.name = `${OUTLINE_PASS_NODE_ID}.${name}_depth`;
 			dt.isRenderTargetTexture = true;
 			rt.depthTexture = dt;
 			this._textures[ rt.depthTexture.name ] = rt.depthTexture;
@@ -309,14 +386,6 @@ class OutlinePassNode extends PassNode {
 		this._cameraNear.value = camera.near;
 		this._cameraFar.value = camera.far;
 
-		// Setup quad material passes
-		//_prepareMaskQuad.material = this._prepareMaskMaterial;
-		//_maskDownSampleQuad.materila = this._maskDownSampleMaterial;
-		//_blur1Quad.material = this._blurMaterial;
-		//_blur2Quad.material = this._blurMaterial;
-		//_edge1Quad.material = this._edgeMaterial;
-		//_edge2Quad.material = this._edgeMaterial;
-
 		// Store old clear values
 
 		renderer.getClearColor( this._oldClearColor );
@@ -328,7 +397,7 @@ class OutlinePassNode extends PassNode {
 		// renderer.autoClear = false;
 		renderer.setClearColor( 0xffffff, 1 );
 
-		// RENDER PASSES ( use this.renderTarget as debug texture )
+		// RENDER PASSES
 
 		// 1. Draw Non Selected objects in the depth buffer
 		this.changeVisibilityOfSelectedObjects( false );
@@ -351,9 +420,7 @@ class OutlinePassNode extends PassNode {
 		this.changeVisibilityOfNonSelectedObjects( true );
 		this._visibilityCache.clear();
 
-		// 3. Create mask through depth comparison
-		//renderer.setRenderTarget( this._prepareMaskRT );
-		//_prepareMaskQuad.render( renderer );
+		// Pass of rest of rendering duties to OutlineNode, but for now, restore render state
 
 		// Reset extant render state
 		renderer.setClearColor( this._oldClearColor, this.oldClearAlpha );
@@ -372,36 +439,15 @@ class OutlinePassNode extends PassNode {
 		const effectiveWidth = this._width * this._pixelRatio;
 		const effectiveHeight = this._height * this._pixelRatio;
 
-		this.renderTarget.setSize( effectiveWidth, effectiveHeight );
 		this._nonSelectedRT.setSize( effectiveWidth, effectiveHeight );
 		this._selectedRT.setSize( effectiveWidth, effectiveHeight );
-		this._prepareMaskRT.setSize( effectiveWidth, effectiveHeight );
-
-		let resx = Math.round( effectiveWidth / this.downSampleRatio );
-		let resy = Math.round( effectiveHeight / this.downSampleRatio );
-		this._maskDownSampleRT.setSize( resx, resy );
-		this._blur1RT.setSize( resx, resy );
-		this._edge1RT.setSize( resx, resy );
-		this._texSize.value.set( resx, resy );
-
-		resx = Math.round( resx / 2 );
-		resy = Math.round( resy / 2 );
-
-		this._blur2RT.setSize( resx, resy );
-		this._edge2RT.setSize( resx, resy );
 
 	}
 
 	dispose() {
 
-		this._prepareMaskRT.dispose();
 		this._nonSelectedRT.dispose();
 		this._selectedRT.dispose();
-		this._maskDownSampleRT.dispose();
-		this._blur1RT.dispose();
-		this._blur2RT.dispose();
-		this._edge1RT.dispose();
-		this._edge2RT.dispose();
 
 	}
 
@@ -412,35 +458,18 @@ class OutlinePassNode extends PassNode {
 		const nonSelectedDepth = super.getTextureNode( this._nonSelectedRT.depthTexture.name );
 		const selectedDepth = super.getTextureNode( this._selectedRT.depthTexture.name );
 
-		return outline( nonSelectedColor, nonSelectedDepth, selectedColor, selectedDepth );
-
-		/*this._prepareMaskMaterial = this._prepareMaskMaterial || builder.createNodeMaterial();
-
-		//const nonSelectedDepthNode = super.getTextureNode( this._nonSelectedRT.depthTexture.name );
-		//const nonSelectedUV = nonSelectedDepthNode.uvNode || uv();
-		//const selectedDepthNode = super.getTextureNode( this._selectedRT.depthTexture.name );
-		//const selectedUV = selectedDepthNode.uvNode || uv();
-
-		const uvNode = uv();
-
-		//const sampleNonSelectedDepth = () => nonSelectedDepthNode.uv( nonSelectedUV );
-		//const sampleSelectedDepth = () => selectedDepthNode.uv( selectedUV );
-
-		const prepareMask = tslFn( () => {
-
-			const nonSelectedDepth = this._nonSelectedDepthTexture.uv( uvNode );
-			const selectedDepth = this._selectedDepthTexture.uv( uvNode );
-
-			const nonSelectedViewZ = perspectiveDepthToViewZ( nonSelectedDepth, this._cameraNear, this._cameraFar );
-			const selectedViewZ = perspectiveDepthToViewZ( selectedDepth, this._cameraNear, this._cameraFar );
-			const depthTest = negate( selectedViewZ ).greaterThan( nonSelectedViewZ ).cond( 1.0, 0.0 );
-			return vec4( 0.0, depthTest, 0.0, 1.0 );
-
+		return outline( nonSelectedColor, nonSelectedDepth, selectedColor, selectedDepth, {
+			visibleEdgeColor: this.visibleEdgeColor,
+			hiddenEdgeColor: this.hiddenEdgeColor,
+			edgeGlow: this.edgeGlow,
+			usePatternTexture: this.usePatternTexture,
+			edgeThickness: this.edgeThickness,
+			edgeStrength: this.edgeStrength,
+			downSampleRatio: this.downSampleRatio,
+			pulsePeriod: this.pulsePeriod,
+			cameraNear: this._cameraNear,
+			cameraFar: this._cameraFar
 		} );
-
-
-		this._prepareMaskMaterial.fragmentNode = prepareMask();
-		this._prepareMaskMaterial.needsUpdate = true; */
 
 	}
 
