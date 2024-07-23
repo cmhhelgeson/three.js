@@ -196,11 +196,6 @@ class PassNode extends TempNode {
 			const cameraFar = this._cameraFar;
 			const viewZNode = this.getViewZNode( name );
 
-<<<<<<< HEAD
-			// TODO: just if ( builder.camera.isPerspectiveCamera )
-
-=======
->>>>>>> 715bf49981 (setup pass node)
 			this._linearDepthNodes[ name ] = linearDepthNode = viewZToOrthographicDepth( viewZNode, cameraNear, cameraFar );
 
 		}
