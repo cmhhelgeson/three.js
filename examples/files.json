@@ -381,7 +381,10 @@
 		"webgpu_postprocessing_pixel",
 		"webgpu_postprocessing_fxaa",
 		"webgpu_postprocessing_sobel",
+<<<<<<< HEAD
 		"webgpu_postprocessing_transition",
+=======
+>>>>>>> 34f4c06c25e8d8d7699c47ec0920d16949514f96
 		"webgpu_postprocessing_outline",
 		"webgpu_postprocessing",
 		"webgpu_procedural_texture",
