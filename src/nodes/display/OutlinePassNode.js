@@ -16,12 +16,6 @@ import { Vector2 } from '../../math/Vector2.js';
 import { Matrix4 } from '../../math/Matrix4.js';
 
 const _prepareMaskQuad = new QuadMesh();
-const _maskDownSampleQuad = new QuadMesh();
-const _edge1Quad = new QuadMesh();
-const _blur1Quad = new QuadMesh();
-const _edge2Quad = new QuadMesh();
-const _blur2Quad = new QuadMesh();
-const _currentClearColor = new Color();
 const _size = new Vector2();
 
 const MAX_EDGE_THICKNESS = 4;
@@ -64,20 +58,28 @@ class OutlineNode extends TempNode {
 		this._texSize = uniform( new Vector2() );
 		this._blurDirection = uniform( new Vector2() );
 
-		// Render Targets
-		this._prepareMaskRT = this.createOutlinePassNodeTarget( 'prepareMask', false );
-		this._maskDownSampleRT = this.createOutlinePassNodeTarget( 'maskDownSamplePass', false );
-		this._edge1RT = this.createOutlinePassNodeTarget( 'edge1' );
-		this._blur1RT = this.createOutlinePassNodeTarget( 'blurOne' );
-		this._edge2RT = this.createOutlinePassNodeTarget( 'edgeTwo' );
-		this._blur2RT = this.createOutlinePassNodeTarget( 'blurTwo' );
+		this._passTextures = {};
 
-		this._returnTextureNode = passTexture( this, this._prepareMaskRT.texture );
+		// Render Targets
+		this._prepareMaskRT = this.createOutlineNodeTarget( 'prepareMask' );
+		this._maskDownSampleRT = this.createOutlineNodeTarget( 'maskDownSamplePass' );
+		this._edge1RT = this.createOutlineNodeTarget( 'edge1' );
+		this._blur1RT = this.createOutlineNodeTarget( 'blurOne' );
+		this._edge2RT = this.createOutlineNodeTarget( 'edgeTwo' );
+		this._blur2RT = this.createOutlineNodeTarget( 'blurTwo' );
+
+		this._passPrepareMaskTextureNode = passTexture( this, this._prepareMaskRT.texture );
+
+		this.updateBeforeType = NodeUpdateType.RENDER;
 
 	}
 
-	createOutlineNodeTarget( name, depthWrite = true ) {
+	createOutlineNodeTarget( name ) {
 
+		const rt = new RenderTarget();
+		rt.texture.name = `${OUTLINE_NODE_ID}.${name}`;
+
+		return rt;
 
 	}
 
@@ -85,54 +87,44 @@ class OutlineNode extends TempNode {
 
 		const { renderer } = frame;
 
-		const map = this.sColorNode.value;
+		const sTextureNode = this.sColorNode;
+		const map = sTextureNode.value;
 
 		const currentRenderTarget = renderer.getRenderTarget();
 		const currentMRT = renderer.getMRT();
+		const currentTexture = sTextureNode.value;
 
-		_prepareMaskQuad.material = this._perpareMaskMaterial;
+		_prepareMaskQuad.material = this._prepareMaskMaterial;
 
 		this.setSize( map.image.width, map.image.height );
-
 		const textureType = map.type;
-
 		this._prepareMaskRT.texture.type = textureType;
-		this._verticalRT.texture.type = textureType;
-		this._maskDownSampleRT.texture.type = textureType;
-		this._edge1RT.texture.type = textureType;
-		this._blur1RT.texture.type = textureType;
-		this._edge2RT.texture.type = textureType;
-		this._blur2RT.texture.type = textureType;
+
 
 		// clear
 
 		renderer.setMRT( null );
 
-		// RENDER PASSES
+		// horizontal
 
-		// 3. Prepare mask by comparing depth of selected and non-selected depth buffers
-		renderer.setRenderTarget( this._preareMaskRT );
-		this._prepareMaskQuad.render( renderer );
+		renderer.setRenderTarget( this._prepareMaskRT );
+		_prepareMaskQuad.render( renderer );
 
 		// restore
 
 		renderer.setRenderTarget( currentRenderTarget );
 		renderer.setMRT( currentMRT );
 
+		sTextureNode.value = currentTexture;
+
 	}
 
 	setSize( width, height ) {
 
-		this._width = width;
-		this._height = height;
+		this._prepareMaskRT.setSize( width, height );
 
-		const effectiveWidth = this._width * this._pixelRatio;
-		const effectiveHeight = this._height * this._pixelRatio;
-
-		this._prepareMaskRT.setSize( effectiveWidth, effectiveHeight );
-
-		let resx = Math.round( effectiveWidth / this.downSampleRatio );
-		let resy = Math.round( effectiveHeight / this.downSampleRatio );
+		let resx = Math.round( width / this.downSampleRatio );
+		let resy = Math.round( height / this.downSampleRatio );
 		this._maskDownSampleRT.setSize( resx, resy );
 		this._blur1RT.setSize( resx, resy );
 		this._edge1RT.setSize( resx, resy );
@@ -174,16 +166,16 @@ class OutlineNode extends TempNode {
 		} );
 
 		this._prepareMaskMaterial = this._prepareMaskMaterial || builder.createNodeMaterial();
-		this._prepareMaskMaterial.fragmentNode = prepareMask();
+		this._prepareMaskMaterial.fragmentNode = prepareMask().context( builder.getSharedContext() );
 		this._prepareMaskMaterial.needsUpdate = true;
 
-		return this._returnTextureNode;
+		return this._passPrepareMaskTextureNode;
 
 	}
 
 }
 
-export const outline = ( nsColor, nsDepth, sColor, sDepth, cameraNear, cameraFar ) => nodeObject( new OutlineNode( nsColor, nsDepth, sColor, sDepth, cameraNear, cameraFar ) );
+export const outline = ( nsColor, nsDepth, sColor, sDepth, uniformObject ) => nodeObject( new OutlineNode( nsColor, nsDepth, sColor, sDepth, uniformObject ) );
 addNodeElement( 'outline', outline );
 
 class OutlinePassNode extends PassNode {
@@ -194,8 +186,6 @@ class OutlinePassNode extends PassNode {
 
 		this.selectedObjects = selectedObjects !== undefined ? selectedObjects : [];
 		this._visibilityCache = new Map();
-
-		this.updateBeforeType = NodeUpdateType.RENDER;
 
 		this.resolution = ( resolution !== undefined ) ? new Vector2( resolution.x, resolution.y ) : new Vector2( 256, 256 );
 
@@ -214,10 +204,18 @@ class OutlinePassNode extends PassNode {
 		// Render targets
 		this._nonSelectedRT = this.createOutlinePassNodeTarget( 'nonSelectedDepth' );
 		this._selectedRT = this.createOutlinePassNodeTarget( 'selectedDepth' );
+		this._prepareMaskRT = this.createOutlinePassNodeTarget( 'prepareMask', false );
 
 		// Revert render state objects
 		this._oldClearColor = new Color();
 		this.oldClearAlpha = 1;
+
+		this._passNonSelectedDepthNode = passTexture( this, this._nonSelectedRT.depthTexture );
+		this._passSelectedDepthNode = passTexture( this, this._selectedRT.depthTexture );
+		this._passNonSelectedColorNode = passTexture( this, this._nonSelectedRT.texture );
+		this._passSelectedColorNode = passTexture( this, this._selectedRT.texture );
+
+		this.updateBeforeType = NodeUpdateType.RENDER;
 
 	}
 
@@ -453,12 +451,7 @@ class OutlinePassNode extends PassNode {
 
 	setup( builder ) {
 
-		const nonSelectedColor = super.getTextureNode( this._nonSelectedRT.texture.name );
-		const selectedColor = super.getTextureNode( this._selectedRT.texture.name );
-		const nonSelectedDepth = super.getTextureNode( this._nonSelectedRT.depthTexture.name );
-		const selectedDepth = super.getTextureNode( this._selectedRT.depthTexture.name );
-
-		return outline( nonSelectedColor, nonSelectedDepth, selectedColor, selectedDepth, {
+		return outline( this._passNonSelectedColor, this._passNonSelectedDepthNode, this._passSelectedColorNode, this._passSelectedDepthNode, {
 			visibleEdgeColor: this.visibleEdgeColor,
 			hiddenEdgeColor: this.hiddenEdgeColor,
 			edgeGlow: this.edgeGlow,

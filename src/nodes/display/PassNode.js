@@ -169,38 +169,35 @@ class PassNode extends TempNode {
 
 	}
 
-	getViewZNode( name = 'depth' ) {
+	getViewZNode() {
 
-		let viewZNode = this._viewZNodes[ name ];
-
-		if ( viewZNode === undefined ) {
+		if ( this._viewZNode === null ) {
 
 			const cameraNear = this._cameraNear;
 			const cameraFar = this._cameraFar;
 
-			this._viewZNodes[ name ] = viewZNode = perspectiveDepthToViewZ( this.getTextureNode( name ), cameraNear, cameraFar );
+			this._viewZNode = perspectiveDepthToViewZ( this.getTextureNode( 'depth' ), cameraNear, cameraFar );
 
 		}
 
-		return viewZNode;
+		return this._viewZNode;
 
 	}
 
-	getLinearDepthNode( name = 'depth' ) {
+	getLinearDepthNode() {
 
-		let linearDepthNode = this._linearDepthNodes[ name ];
-
-		if ( linearDepthNode === undefined ) {
+		if ( this._linearDepthNode === null ) {
 
 			const cameraNear = this._cameraNear;
 			const cameraFar = this._cameraFar;
-			const viewZNode = this.getViewZNode( name );
 
-			this._linearDepthNodes[ name ] = linearDepthNode = viewZToOrthographicDepth( viewZNode, cameraNear, cameraFar );
+			// TODO: just if ( builder.camera.isPerspectiveCamera )
+
+			this._linearDepthNode = viewZToOrthographicDepth( this.getViewZNode(), cameraNear, cameraFar );
 
 		}
 
-		return linearDepthNode;
+		return this._linearDepthNode;
 
 	}
 

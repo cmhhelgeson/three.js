@@ -204,4 +204,3 @@ export const gaussianBlur = ( node, directionNode, sigma ) => nodeObject( new Ga
 addNodeElement( 'gaussianBlur', gaussianBlur );
 
 export default GaussianBlurNode;
-

@@ -180,6 +180,8 @@ class PixelationPassNode extends PassNode {
 		const adjustedWidth = Math.floor( width / pixelSize );
 		const adjustedHeight = Math.floor( height / pixelSize );
 
+		console.log( width, height );
+
 		super.setSize( adjustedWidth, adjustedHeight );
 
 	}
