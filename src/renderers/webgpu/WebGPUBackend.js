@@ -819,7 +819,7 @@ class WebGPUBackend extends Backend {
 
 	draw( renderObject, info ) {
 
-		const { object, geometry, context, pipeline } = renderObject;
+		const { object, geometry, context, pipeline, material } = renderObject;
 
 		const bindings = renderObject.getBindings();
 		const contextData = this.get( context );
@@ -933,6 +933,11 @@ class WebGPUBackend extends Backend {
 		}
 
 		// draw
+		if ( material.stencilWrite ) {
+
+			passEncoderGPU.setStencilReference( material.stencilRef );
+
+		}
 
 		const drawRange = renderObject.drawRange;
 		const firstVertex = drawRange.start;
@@ -1018,7 +1023,7 @@ class WebGPUBackend extends Backend {
 			data.sampleCount !== sampleCount || data.colorSpace !== colorSpace ||
 			data.colorFormat !== colorFormat || data.depthStencilFormat !== depthStencilFormat ||
 			data.primitiveTopology !== primitiveTopology ||
-			data.clippingContextVersion !== renderObject.clippingContextVersion
+			data.clippingContextVersion !== renderObject.clippingContextVersion || data.stencilRef !== material.stencilRef
 		) {
 
 			data.material = material; data.materialVersion = material.version;
@@ -1030,6 +1035,7 @@ class WebGPUBackend extends Backend {
 			data.stencilWrite = material.stencilWrite; data.stencilFunc = material.stencilFunc;
 			data.stencilFail = material.stencilFail; data.stencilZFail = material.stencilZFail; data.stencilZPass = material.stencilZPass;
 			data.stencilFuncMask = material.stencilFuncMask; data.stencilWriteMask = material.stencilWriteMask;
+			data.stencilRef = material.stencilRef;
 			data.side = material.side; data.alphaToCoverage = material.alphaToCoverage;
 			data.sampleCount = sampleCount;
 			data.colorSpace = colorSpace;

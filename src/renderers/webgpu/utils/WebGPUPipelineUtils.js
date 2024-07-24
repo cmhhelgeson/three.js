@@ -76,8 +76,10 @@ class WebGPUPipelineUtils {
 				compare: this._getStencilCompare( material ),
 				failOp: this._getStencilOperation( material.stencilFail ),
 				depthFailOp: this._getStencilOperation( material.stencilZFail ),
-				passOp: this._getStencilOperation( material.stencilZPass )
+				passOp: 'replace', //this._getStencilOperation( material.stencilZPass )
 			};
+
+			console.log( stencilFront );
 
 		}
 
