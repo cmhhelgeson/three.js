@@ -1,4 +1,4 @@
-import { addNodeElement, tslFn, vec3, vec4, float } from '../shadernode/ShaderNode.js';
+import { addNodeElement, tslFn, vec3, vec4 } from '../shadernode/ShaderNode.js';
 import { min } from '../math/MathNode.js';
 import { dot } from '../math/MathNode.js';
 
