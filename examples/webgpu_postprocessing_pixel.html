@@ -33,7 +33,7 @@
 		import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 		import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
 
-		import { uniform, pixelationPass, sepia, mix } from 'three/tsl';
+		import { uniform, pixelationPass, sepia, mix, bleach } from 'three/tsl';
 
 		let camera, scene, renderer, postProcessing, crystalMesh, clock;
 		let gui, effectController;
@@ -136,14 +136,17 @@
 				pixelSize: uniform( 6 ),
 				normalEdgeStrength: uniform( 0.3 ),
 				depthEdgeStrength: uniform( 0.4 ),
-				mixValue: uniform( 0.1 ),
+				sepiaMix: uniform( 0.1 ),
+				bleachMix: uniform( 0.1 ),
 				pixelAlignedPanning: true
 			};
 
 			postProcessing = new THREE.PostProcessing( renderer );
 			const scenePass = pixelationPass( scene, camera, effectController.pixelSize, effectController.normalEdgeStrength, effectController.depthEdgeStrength );
-			const sepiaPass = sepia( { color: scenePass.getTextureNode() } );
-			postProcessing.outputNode = mix( scenePass, sepiaPass, effectController.mixValue );
+			const sepiaPass = sepia( { color: scenePass.renderOutput() } );
+			const combinePass = mix( scenePass, sepiaPass, effectController.sepiaMix );
+			const bleachPass = bleach( { color: combinePass.renderOutput(), opacity: effectController.bleachMix } );
+			postProcessing.outputNode = bleachPass;
 
 			window.addEventListener( 'resize', onWindowResize );
 
@@ -157,7 +160,8 @@
 			gui.add( effectController.normalEdgeStrength, 'value', 0, 2, 0.05 ).name( 'Normal Edge Strength' );
 			gui.add( effectController.depthEdgeStrength, 'value', 0, 1, 0.05 ).name( 'Depth Edge Strength' );
 			gui.add( effectController, 'pixelAlignedPanning' );
-			gui.add( effectController.mixValue, 'value', 0, 1, 0.01 ).name( 'Sepia Mix' );
+			gui.add( effectController.sepiaMix, 'value', 0, 1, 0.01 ).name( 'Sepia Mix' );
+			gui.add( effectController.bleachMix, 'value', 0, 1, 0.01 ).name( 'Bleach Mix' );
 
 		}
 

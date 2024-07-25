@@ -32,8 +32,12 @@
 		import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 		import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 		import { RenderPixelatedPass } from 'three/addons/postprocessing/RenderPixelatedPass.js';
+		import { BleachBypassShader } from 'three/addons/shaders/BleachBypassShader.js';
 		import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+		import { SepiaShader } from 'three/addons/shaders/SepiaShader.js';
 		import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+		import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+		import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 
 		let camera, scene, renderer, composer, crystalMesh, clock;
 		let gui, params;
@@ -64,6 +68,17 @@
 			const renderPixelatedPass = new RenderPixelatedPass( 6, scene, camera );
 			composer.addPass( renderPixelatedPass );
 
+			const shaderBleach = BleachBypassShader;
+			const shaderSepia = SepiaShader;
+		
+			const effectSepia = new ShaderPass( shaderSepia );
+			effectSepia.uniforms[ 'amount' ].value = 0.1;
+			const effectBleach = new ShaderPass( shaderBleach );
+			effectBleach.uniforms[ 'opacity' ].value = 0.1;
+
+			composer.addPass( effectSepia );
+			composer.addPass( effectBleach );
+
 			const outputPass = new OutputPass();
 			composer.addPass( outputPass );
 
@@ -75,7 +90,7 @@
 			// gui
 
 			gui = new GUI();
-			params = { pixelSize: 6, normalEdgeStrength: .3, depthEdgeStrength: .4, pixelAlignedPanning: true };
+			params = { pixelSize: 6, normalEdgeStrength: .3, depthEdgeStrength: .4, pixelAlignedPanning: true, bleachOpacity: 0.1, sepiaAmount: 0.1 };
 			gui.add( params, 'pixelSize' ).min( 1 ).max( 16 ).step( 1 )
 				.onChange( () => {
 
@@ -85,6 +100,16 @@
 			gui.add( renderPixelatedPass, 'normalEdgeStrength' ).min( 0 ).max( 2 ).step( .05 );
 			gui.add( renderPixelatedPass, 'depthEdgeStrength' ).min( 0 ).max( 1 ).step( .05 );
 			gui.add( params, 'pixelAlignedPanning' );
+			gui.add( params, 'sepiaAmount', 0.0, 1.0, 0.01 ).onChange( () => {
+
+				effectSepia.uniforms[ 'amount' ].value = params.sepiaAmount;
+
+			} );
+			gui.add( params, 'bleachOpacity', 0.0, 1.0, 0.01 ).onChange( () => {
+
+				effectBleach.uniforms[ 'opacity' ].value = params.bleachOpacity;
+		
+			} );
 
 			// textures
 
