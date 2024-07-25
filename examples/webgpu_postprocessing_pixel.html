@@ -142,7 +142,7 @@
 
 			postProcessing = new THREE.PostProcessing( renderer );
 			const scenePass = pixelationPass( scene, camera, effectController.pixelSize, effectController.normalEdgeStrength, effectController.depthEdgeStrength );
-			const sepiaPass = sepia( { color: scenePass.getTextureNode().rgba } );
+			const sepiaPass = sepia( { color: scenePass.getTextureNode() } );
 			postProcessing.outputNode = mix( scenePass, sepiaPass, effectController.mixValue );
 
 			window.addEventListener( 'resize', onWindowResize );
