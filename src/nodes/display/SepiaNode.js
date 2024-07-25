@@ -1,7 +1,4 @@
-import TempNode from '../core/TempNode.js';
-import { nodeObject, addNodeElement, tslFn, vec3, vec4, float } from '../shadernode/ShaderNode.js';
-import { NodeUpdateType } from '../core/constants.js';
-import { uv } from '../accessors/UVNode.js';
+import { addNodeElement, tslFn, vec3, vec4, float } from '../shadernode/ShaderNode.js';
 import { min } from '../math/MathNode.js';
 import { dot } from '../math/MathNode.js';
 
