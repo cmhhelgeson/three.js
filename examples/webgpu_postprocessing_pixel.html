@@ -136,12 +136,13 @@
 				pixelSize: uniform( 6 ),
 				normalEdgeStrength: uniform( 0.3 ),
 				depthEdgeStrength: uniform( 0.4 ),
+				sepia: uniform( 0.5 ),
 				pixelAlignedPanning: true
 			};
 
 			postProcessing = new THREE.PostProcessing( renderer );
 			const scenePass = pixelationPass( scene, camera, effectController.pixelSize, effectController.normalEdgeStrength, effectController.depthEdgeStrength );
-			postProcessing.outputNode = scenePass;
+			postProcessing.outputNode = scenePass.sepia( effectController.sepia );
 
 			window.addEventListener( 'resize', onWindowResize );
 
@@ -155,6 +156,7 @@
 			gui.add( effectController.normalEdgeStrength, 'value', 0, 2, 0.05 ).name( 'Normal Edge Strength' );
 			gui.add( effectController.depthEdgeStrength, 'value', 0, 1, 0.05 ).name( 'Depth Edge Strength' );
 			gui.add( effectController, 'pixelAlignedPanning' );
+			gui.add( effectController.sepia, 'value', 0, 1, 0.01 ).name( 'Sepia Amount' );
 
 		}
 
