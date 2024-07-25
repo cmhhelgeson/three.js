@@ -7,50 +7,16 @@ import { dot } from '../math/MathNode.js';
 
 import { property } from '../core/PropertyNode.js';
 
-class SepiaNode extends TempNode {
+export const sepia = /*@__PURE__*/ tslFn( ( { color } ) => {
 
-	constructor( textureNode, amount ) {
+	const c = property( 'vec3', 'c' ).assign( color.rgb );
 
-		super( 'vec4' );
+	color.r = dot( c, vec3( 0.393, 0.769, 0.189 ) );
+	color.g = dot( c, vec3( 0.349, 0.686, 0.168 ) );
+	color.b = dot( c, vec3( 0.272, 0.534, float( 1.0 ).sub( 0.869 ) ) );
 
-		this.textureNode = textureNode;
-		this.amount = amount;
+	return vec4( min( vec3( 1.0 ), color.rgb ), 1.0 );
 
-		this.updateBeforeType = NodeUpdateType.RENDER;
-
-	}
-
-	setup() {
-
-		const textureNode = this.textureNode;
-		const amount = this.amount;
-		const uvNode = textureNode.uvNode || uv();
-
-		const sampleTexture = ( uv ) => textureNode.uv( uv );
-
-		const sepia = tslFn( () => {
-
-			const color = sampleTexture( uvNode );
-			const c = property( 'vec3', 'c' ).assign( color.rgb );
-
-			color.r = dot( c, vec3( float( 1.0 ).sub( amount.mul( 0.607 ) ), amount.mul( 0.769 ), amount.mul( 0.189 ) ) );
-			color.g = dot( c, vec3( amount.mul( 0.349 ), float( 1.0 ).sub( amount.mul( 0.314 ) ), amount.mul( 0.168 ) ) );
-			color.b = dot( c, vec3( amount.mul( 0.272 ), amount.mul( 0.534 ), float( 1.0 ).sub( amount.mul( 0.869 ) ) ) );
-
-			return vec4( min( vec3( 1.0 ), color.rgb ), color.a );
-
-		} );
-
-		const outputNode = sepia();
-
-		return outputNode;
-
-	}
-
-}
-
-export const sepia = ( node, amount ) => nodeObject( new SepiaNode( nodeObject( node ).toTexture(), nodeObject( amount ) ) );
+} );
 
 addNodeElement( 'sepia', sepia );
-
-export default SepiaNode;
