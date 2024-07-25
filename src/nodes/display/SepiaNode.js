@@ -10,7 +10,7 @@ export const sepia = /*@__PURE__*/ tslFn( ( { color } ) => {
 
 	color.r = dot( c, vec3( 0.393, 0.769, 0.189 ) );
 	color.g = dot( c, vec3( 0.349, 0.686, 0.168 ) );
-	color.b = dot( c, vec3( 0.272, 0.534, float( 1.0 ).sub( 0.869 ) ) );
+	color.b = dot( c, vec3( 0.272, 0.534, 0.131 ) );
 
 	return vec4( min( vec3( 1.0 ), color.rgb ), 1.0 );
 
