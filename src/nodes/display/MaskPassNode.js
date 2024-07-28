@@ -1,4 +1,4 @@
-import { nodeObject, vec4 } from '../shadernode/ShaderNode.js';
+import { nodeObject } from '../shadernode/ShaderNode.js';
 import { output } from '../core/PropertyNode.js';
 import PassNode from './PassNode.js';
 import { mrt } from '../core/MRTNode.js';
@@ -11,7 +11,7 @@ const _size = /*@__PURE__*/ new Vector2();
 
 class MaskPassNode extends PassNode {
 
-	constructor( baseTextureNode, scene, camera, innerTextureNode ) {
+	constructor( baseTextureNode, scene, camera, innerTextureNode, inverse ) {
 
 		super( 'color', scene, camera );
 
@@ -19,6 +19,7 @@ class MaskPassNode extends PassNode {
 		this.innerTextureNode = innerTextureNode;
 
 		this.isMaskPassNode = true;
+		this.inverse = inverse;
 
 		this._oldClearColor = new Color();
 
@@ -67,15 +68,25 @@ class MaskPassNode extends PassNode {
 		const mask = super.getTextureNode( 'maskPass' );
 		const alpha = super.getTextureNode( 'alphaPass' );
 
-		const base = this.baseTextureNode.sub( this.baseTextureNode.mul( alpha ) );
-		const composite = base.add( mask );
+		const alphaArea = this.baseTextureNode.mul( alpha );
 
-		return composite;
+		if ( this.inverse ) {
+
+			const textureOutOfAlpha = this.innerTextureNode.sub( this.innerTextureNode.mul( alpha ) );
+			const output = alphaArea.add( textureOutOfAlpha );
+			return output;
+
+		}
+
+		const base = this.baseTextureNode.sub( alphaArea );
+		const output = base.add( mask );
+		return output;
 
 	}
 
 }
 
-export const applyMask = ( baseTextureNode, scene, camera, inputTextureNode ) => nodeObject( new MaskPassNode( nodeObject( baseTextureNode ).toTexture(), scene, camera, nodeObject( inputTextureNode ).toTexture() ) );
+export const applyMask = ( baseTextureNode, scene, camera, inputTextureNode ) => nodeObject( new MaskPassNode( nodeObject( baseTextureNode ).toTexture(), scene, camera, nodeObject( inputTextureNode ).toTexture(), false ) );
+export const applyInverseMask = ( baseTextureNode, scene, camera, inputTextureNode ) => nodeObject( new MaskPassNode( nodeObject( baseTextureNode ).toTexture(), scene, camera, nodeObject( inputTextureNode ).toTexture(), true ) );
 
 export default MaskPassNode;

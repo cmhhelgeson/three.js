@@ -23,10 +23,11 @@
 		<script type="module">
 
 			import * as THREE from 'three';
-			import { pass, mrt, uv, texture, output, min, float, vec2, vec3, vec4, applyMask } from 'three/tsl';
+			import { pass, uv, texture, applyMask, applyInverseMask } from 'three/tsl';
+			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
 
-			let camera, postProcessing, renderer;
-			let box, torus;
+			let camera, postProcessingForward, postProcessingInverse, renderer, gui, params;
+			let box, torus, crate;
 
 			init();
 
@@ -52,6 +53,10 @@
 				const texture1Node = texture( texture1, uvNode );
 				const texture2Node = texture( texture2, uvNode );
 
+				const crateTexture = new THREE.TextureLoader().load( 'textures/crate.gif' );
+				crate = new THREE.Mesh( new THREE.BoxGeometry( 2, 2, 2 ), new THREE.MeshBasicMaterial( { map: crateTexture } ) );
+				baseScene.add( crate );
+
 				box = new THREE.Mesh( new THREE.BoxGeometry( 4, 4, 4 ) );
 				maskScene1.add( box );
 
@@ -63,15 +68,28 @@
 				renderer.setPixelRatio( window.devicePixelRatio );
 				renderer.setSize( window.innerWidth, window.innerHeight );
 				renderer.setAnimationLoop( animate );
-				//renderer.autoClear = false;
 				document.body.appendChild( renderer.domElement );
 
-				postProcessing = new THREE.PostProcessing( renderer );
+				postProcessingForward = new THREE.PostProcessing( renderer );
+				postProcessingInverse = new THREE.PostProcessing( renderer );
 				const baseScenePass = pass( baseScene, camera );
+			
+				// Regular mask
 				const applyMask1 = applyMask( baseScenePass, maskScene1, camera, texture1Node );
 				const applyMask2 = applyMask( applyMask1, maskScene2, camera, texture2Node );
+				postProcessingForward.outputNode = applyMask2;
 
-				postProcessing.outputNode = applyMask2;
+				// Inverse mask
+				const applyInverseMask1 = applyInverseMask( baseScenePass, maskScene1, camera, texture1Node );
+				const applyInverseMask2 = applyInverseMask( applyInverseMask1, maskScene2, camera, texture2Node );
+				postProcessingInverse.outputNode = applyInverseMask2;
+
+				params = {
+					inverseMask: false,
+				};
+
+				gui = new GUI();
+				gui.add( params, 'inverseMask' );
 
 				window.addEventListener( 'resize', onWindowResize );
 
@@ -93,6 +111,9 @@
 
 				const time = performance.now() * 0.001 + 6000;
 
+				crate.rotation.x += 0.005;
+				crate.rotation.y += 0.01;
+
 				box.position.x = Math.cos( time / 1.5 ) * 2;
 				box.position.y = Math.sin( time ) * 2;
 				box.rotation.x = time;
@@ -104,7 +125,16 @@
 				torus.rotation.y = time / 2;
 
 				renderer.clear();
-				postProcessing.render();
+			
+				if ( params.inverseMask ) {
+
+					postProcessingInverse.render();
+			
+				} else {
+
+					postProcessingForward.render();
+			
+				}
 
 			}
 

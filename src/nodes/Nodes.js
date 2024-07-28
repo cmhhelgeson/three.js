@@ -128,7 +128,7 @@ export { default as ViewportDepthNode, viewZToOrthographicDepth, orthographicDep
 export { default as GaussianBlurNode, gaussianBlur } from './display/GaussianBlurNode.js';
 export { default as AfterImageNode, afterImage } from './display/AfterImageNode.js';
 export { default as AnamorphicNode, anamorphic } from './display/AnamorphicNode.js';
-export { default as MaskPassNode, applyMask } from './display/MaskPassNode.js';
+export { default as MaskPassNode, applyMask, applyInverseMask } from './display/MaskPassNode.js';
 export { default as SobelOperatorNode, sobel } from './display/SobelOperatorNode.js';
 export { default as DepthOfFieldNode, dof } from './display/DepthOfFieldNode.js';
 export { default as DotScreenNode, dotScreen } from './display/DotScreenNode.js';
