@@ -143,6 +143,7 @@ export { default as RenderOutputNode, renderOutput } from './display/RenderOutpu
 export { default as PixelationPassNode, pixelationPass } from './display/PixelationPassNode.js';
 export { sepia } from './display/SepiaNode.js';
 export { bleach } from './display/BleachBypassNode.js';
+export { default as MaskPassNode, applyMask, applyInverseMask } from './display/MaskPassNode.js';
 
 export { default as PassNode, pass, passTexture, depthPass } from './display/PassNode.js';
 
