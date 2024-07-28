@@ -24,8 +24,8 @@ class MaskPassNode extends PassNode {
 
 		this._mrt = mrt( {
 			output: output,
-			mask: vec4( 1.0, 0.0, 0.0, 1.0 ),
-			alpha: output.a,
+			maskPass: texture( innerTextureNode.value, viewportBottomLeft ),
+			alphaPass: output.a,
 		} );
 
 	}
@@ -64,15 +64,18 @@ class MaskPassNode extends PassNode {
 
 	setup() {
 
-		const mask = super.getTextureNode( 'mask' );
-		const alpha = super.getTextureNode( 'alpha' );
+		const mask = super.getTextureNode( 'maskPass' );
+		const alpha = super.getTextureNode( 'alphaPass' );
 
-		return super.getTextureNode( 'output' );
+		const base = this.baseTextureNode.sub( this.baseTextureNode.mul( alpha ) );
+		const composite = base.add( mask );
+
+		return composite;
 
 	}
 
 }
 
-export const applyMask = ( baseTextureNode, scene, camera, inputTextureNode ) => nodeObject( new MaskPassNode( baseTextureNode, scene, camera, inputTextureNode ) );
+export const applyMask = ( baseTextureNode, scene, camera, inputTextureNode ) => nodeObject( new MaskPassNode( nodeObject( baseTextureNode ).toTexture(), scene, camera, nodeObject( inputTextureNode ).toTexture() ) );
 
 export default MaskPassNode;

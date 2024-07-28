@@ -23,10 +23,10 @@
 		<script type="module">
 
 			import * as THREE from 'three';
-			import { pass, mrt, uv, texture, output, min, float, vec2, vec3, vec4, triplanarTexture, viewportBottomLeft } from 'three/tsl';
+			import { pass, mrt, uv, texture, output, min, float, vec2, vec3, vec4, applyMask } from 'three/tsl';
 
 			let camera, postProcessing, renderer;
-			let box, maskBox, maskTorus, torus;
+			let box, torus;
 
 			init();
 
@@ -35,7 +35,7 @@
 				camera = new THREE.PerspectiveCamera( 50, window.innerWidth / window.innerHeight, 1, 1000 );
 				camera.position.z = 10;
 
-				const scene = new THREE.Scene();
+				const baseScene = new THREE.Scene();
 				const maskScene1 = new THREE.Scene();
 				const maskScene2 = new THREE.Scene();
 
@@ -47,6 +47,10 @@
 				const opacityTexture = new THREE.TextureLoader().load( './textures/alphaMap.jpg' );
 				opacityTexture.wrapS = THREE.RepeatWrapping;
 				opacityTexture.wrapT = THREE.RepeatWrapping;
+
+				const uvNode = uv().sub( 0, 1 ).mul( 1, - 1 );
+				const texture1Node = texture( texture1, uvNode );
+				const texture2Node = texture( texture2, uvNode );
 
 				box = new THREE.Mesh( new THREE.BoxGeometry( 4, 4, 4 ) );
 				maskScene1.add( box );
@@ -63,27 +67,11 @@
 				document.body.appendChild( renderer.domElement );
 
 				postProcessing = new THREE.PostProcessing( renderer );
-				const scenePassOne = pass( maskScene1, camera );
-				scenePassOne.setMRT( mrt( {
-					output: output.renderOutput(),
-					mask: texture( texture1, viewportBottomLeft ),
-					alpha: output.a, // empty as default, custom materials can set this
-				} ) );
-				const mask1 = scenePassOne.getTextureNode( 'mask' );
-				const alpha1 = scenePassOne.getTextureNode( 'alpha' );
-				const scenePassTwo = pass( maskScene2, camera );
-				scenePassTwo.setMRT( mrt( {
-					output: output,
-					mask: texture( texture2, viewportBottomLeft ).renderOutput(),
-					alpha: output.a,
-				} ) );
-				const sceneMaskTwo = scenePassTwo.getTextureNode( 'mask' );
-				const sceneAlphaTwo = scenePassTwo.getTextureNode( 'alpha' );
+				const baseScenePass = pass( baseScene, camera );
+				const applyMask1 = applyMask( baseScenePass, maskScene1, camera, texture1Node );
+				const applyMask2 = applyMask( applyMask1, maskScene2, camera, texture2Node );
 
-				const s1 = mask1.sub( mask1.mul( sceneAlphaTwo ) );
-				const s2 = s1.add( sceneMaskTwo );
-
-				postProcessing.outputNode = s2;//vec4( 1.0, 0.0, 0.5, 1.0 );
+				postProcessing.outputNode = applyMask2;
 
 				window.addEventListener( 'resize', onWindowResize );
 
