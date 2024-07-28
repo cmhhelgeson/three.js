@@ -69,9 +69,9 @@
 					mask: texture( texture1, viewportBottomLeft ),
 					alpha: output.a, // empty as default, custom materials can set this
 				} ) );
-				const sceneMaskOne = scenePassOne.getTextureNode( 'mask' );
-				const sceneAlphaOne = scenePassOne.getTextureNode( 'alpha' );
-				const scenePassTwo = pass( scene2, camera );
+				const mask1 = scenePassOne.getTextureNode( 'mask' );
+				const alpha1 = scenePassOne.getTextureNode( 'alpha' );
+				const scenePassTwo = pass( maskScene2, camera );
 				scenePassTwo.setMRT( mrt( {
 					output: output,
 					mask: texture( texture2, viewportBottomLeft ).renderOutput(),
@@ -80,7 +80,7 @@
 				const sceneMaskTwo = scenePassTwo.getTextureNode( 'mask' );
 				const sceneAlphaTwo = scenePassTwo.getTextureNode( 'alpha' );
 
-				const s1 = sceneMaskOne.sub( sceneMaskOne.mul( sceneAlphaTwo ) );
+				const s1 = mask1.sub( mask1.mul( sceneAlphaTwo ) );
 				const s2 = s1.add( sceneMaskTwo );
 
 				postProcessing.outputNode = s2;//vec4( 1.0, 0.0, 0.5, 1.0 );
