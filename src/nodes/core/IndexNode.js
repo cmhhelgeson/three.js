@@ -21,27 +21,52 @@ class IndexNode extends Node {
 
 		let propertyName;
 
-		if ( scope === IndexNode.VERTEX ) {
+		switch ( scope ) {
 
-			propertyName = builder.getVertexIndex();
+			case IndexNode.VERTEX : {
 
-		} else if ( scope === IndexNode.INSTANCE ) {
+				propertyName = builder.getVertexIndex();
+				break;
 
-			propertyName = builder.getInstanceIndex();
+			}
 
-		} else if ( scope === IndexNode.DRAW ) {
+			case IndexNode.INSTANCE: {
 
-			propertyName = builder.getDrawIndex();
+				propertyName = builder.getInstanceIndex();
+				break;
 
-		} else {
+			}
 
-			throw new Error( 'THREE.IndexNode: Unknown scope: ' + scope );
+			case IndexNode.DRAW: {
+
+				propertyName = builder.getDrawIndex();
+				break;
+
+			}
+
+			case IndexNode.SUBGROUP: {
+
+				if ( builder.shaderStage === 'vertex' ) {
+
+					throw new Error( 'THREE.IndexNode: Index of scope: ' + scope + ' cannot be used in the vertex stage' );
+
+				}
+
+				propertyName = builder.getSubgroupIndex();
+
+			}
+
+			default: {
+
+				throw new Error( 'THREE.IndexNode: Unknown scope: ' + scope );
+
+			}
 
 		}
 
 		let output;
 
-		if ( builder.shaderStage === 'vertex' || builder.shaderStage === 'compute' ) {
+		if ( builder.shaderStage === 'vertex' || builder.shaderStage === 'compute' || scope === IndexNode.SUBGROUP ) {
 
 			output = propertyName;
 
@@ -62,11 +87,13 @@ class IndexNode extends Node {
 IndexNode.VERTEX = 'vertex';
 IndexNode.INSTANCE = 'instance';
 IndexNode.DRAW = 'draw';
+IndexNode.SUBGROUP = 'subgroup';
 
 export default IndexNode;
 
 export const vertexIndex = nodeImmutable( IndexNode, IndexNode.VERTEX );
 export const instanceIndex = nodeImmutable( IndexNode, IndexNode.INSTANCE );
 export const drawIndex = nodeImmutable( IndexNode, IndexNode.DRAW );
+export const subgroupIndex = nodeImmutable( IndexNode, IndexNode.SUBGROUP );
 
 addNodeClass( 'IndexNode', IndexNode );
