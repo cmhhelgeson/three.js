@@ -165,6 +165,8 @@ export { default as RangeNode, range } from './geometry/RangeNode.js';
 
 // gpgpu
 export { default as ComputeNode, compute } from './gpgpu/ComputeNode.js';
+export { workgroupBarrier, subgroupBarrier, textureBarrier } from './gpgpu/SynchronizationNode.js';
+export { default as SubgroupFunctionNode, subgroupElect, subgroupAll, subgroupAny, subgroupBroadcast, subgroupBroadcastFirst, subgroupBallot, subgroupAdd, subgroupExclusiveAdd, subgroupMul, subgroupAnd, subgroupOr, subgroupXor, subgroupMin, subgroupMax, subgroupShuffle, subgroupShuffleXor, subgroupShuffleUp, subgroupShuffleDown } from './gpgpu/SubgroupFunctionNode.js';
 
 // lighting
 export { default as LightNode, lightTargetDirection } from './lighting/LightNode.js';
