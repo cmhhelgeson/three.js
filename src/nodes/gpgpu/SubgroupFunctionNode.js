@@ -1,4 +1,3 @@
-import { expression } from '../code/ExpressionNode.js';
 import { addNodeElement, nodeProxy } from '../shadernode/ShaderNode.js';
 import { addNodeClass } from '../core/Node.js';
 import TempNode from '../core/TempNode.js';
@@ -56,6 +55,8 @@ class SubgroupFunctionNode extends TempNode {
 	}
 
 	generate( builder, output ) {
+
+		builder.enableSubgroups();
 
 		const method = this.method;
 
@@ -137,6 +138,8 @@ SubgroupFunctionNode.SHUFFLE_XOR = 'subgroupShuffleXor';
 SubgroupFunctionNode.SHUFFLE_UP = 'subgroupShuffleUp';
 SubgroupFunctionNode.SHUFFLE_DOWN = 'subgroupShuffleDown';
 
+export default SubgroupFunctionNode;
+
 // Subgroup Builti-in Functions
 export const subgroupElect = nodeProxy( SubgroupFunctionNode, SubgroupFunctionNode.ELECT );
 export const subgroupAll = nodeProxy( SubgroupFunctionNode, SubgroupFunctionNode.ALL );
@@ -153,7 +156,7 @@ export const subgroupXor = nodeProxy( SubgroupFunctionNode, SubgroupFunctionNode
 export const subgroupMin = nodeProxy( SubgroupFunctionNode, SubgroupFunctionNode.MIN );
 export const subgroupMax = nodeProxy( SubgroupFunctionNode, SubgroupFunctionNode.MAX );
 export const subgroupShuffle = nodeProxy( SubgroupFunctionNode, SubgroupFunctionNode.SHUFFLE );
-export const subgroupShuffleXOR = nodeProxy( SubgroupFunctionNode, SubgroupFunctionNode.SHUFFLE_XOR );
+export const subgroupShuffleXor = nodeProxy( SubgroupFunctionNode, SubgroupFunctionNode.SHUFFLE_XOR );
 export const subgroupShuffleUp = nodeProxy( SubgroupFunctionNode, SubgroupFunctionNode.SHUFFLE_UP );
 export const subgroupShuffleDown = nodeProxy( SubgroupFunctionNode, SubgroupFunctionNode.SHUFFLE_DOWN );
 
@@ -172,7 +175,7 @@ addNodeElement( 'subgroupXor', subgroupXor );
 addNodeElement( 'subgroupMin', subgroupMin );
 addNodeElement( 'subgroupMax', subgroupMax );
 addNodeElement( 'subgroupShuffle', subgroupShuffle );
-addNodeElement( 'subgroupShuffleXor', subgroupShuffleXOR );
+addNodeElement( 'subgroupShuffleXor', subgroupShuffleXor );
 addNodeElement( 'subgroupShuffleUp', subgroupShuffleUp );
 addNodeElement( 'subgroupShuffleDown', subgroupShuffleDown );
 
