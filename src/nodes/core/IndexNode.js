@@ -52,6 +52,8 @@ class IndexNode extends Node {
 
 				}
 
+				builder.enableSubgroups();
+
 				propertyName = builder.getSubgroupIndex();
 
 			}
