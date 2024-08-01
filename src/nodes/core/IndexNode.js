@@ -46,6 +46,8 @@ class IndexNode extends Node {
 
 			case IndexNode.SUBGROUP: {
 
+				console.log( 'test' );
+
 				if ( builder.shaderStage === 'vertex' ) {
 
 					throw new Error( 'THREE.IndexNode: Index of scope: ' + scope + ' cannot be used in the vertex stage' );
@@ -55,6 +57,8 @@ class IndexNode extends Node {
 				builder.enableSubgroups();
 
 				propertyName = builder.getSubgroupIndex();
+
+				break;
 
 			}
 

@@ -713,7 +713,7 @@ ${ flowData.code }
 
 	}
 
-	enableSubGroups() {
+	enableSubgroups() {
 
 		this.enableDirective( 'subgroups' );
 

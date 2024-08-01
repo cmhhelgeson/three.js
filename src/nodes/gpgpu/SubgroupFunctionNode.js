@@ -10,6 +10,7 @@ class SubgroupFunctionNode extends TempNode {
 		super();
 
 		this.method = method;
+		console.log( this.method );
 
 		this.aNode = aNode;
 		this.bNode = bNode;
@@ -68,14 +69,22 @@ class SubgroupFunctionNode extends TempNode {
 
 		const params = [];
 
-		if ( method === SubgroupFunctionNode.BROADCAST || method === SubgroupFunctionNode.SHUFFLE ) {
+		if ( method === SubgroupFunctionNode.ELECT ) {
+
+			console.log( builder.getMethod( method, type ) );
+
+			return builder.format( 'quadBroadcast()', type, output );
+
+
+
+		} else if ( method === SubgroupFunctionNode.BROADCAST || method === SubgroupFunctionNode.SHUFFLE ) {
 
 			params.push(
 				a.build( builder, inputType ),
 				b.build( builder, b.getNodeType( builder ) === 'float' ? 'int' : b.getNodeType( builder ) )
 			);
 
-		} else if ( method === SubgroupFunctionNode.SHUFFLE_XOR || SubgroupFunctionNode.SHUFFLE_UP || SubgroupFunctionNode.SHUFFLE_DOWN ) {
+		} else if ( method === SubgroupFunctionNode.SHUFFLE_XOR || method === SubgroupFunctionNode.SHUFFLE_UP || method === SubgroupFunctionNode.SHUFFLE_DOWN ) {
 
 			params.push(
 				a.build( builder, inputType ),
