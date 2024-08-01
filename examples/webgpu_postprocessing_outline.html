@@ -27,13 +27,13 @@
 
 			import Stats from 'three/addons/libs/stats.module.js';
 			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
-			import { pass, clamp, mix, selectedPass, uniform, luminance, step, vibrance, nonSelectedPass, saturation } from 'three/tsl';
+			import { pass, float, selectedPass, uniform, mrt, output, step } from 'three/tsl';
 
 			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 			import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 
 			let container, stats;
-			let camera, scene, renderer, controls, selectedRenderPass, nonSelectedRenderPass;
+			let camera, scene, renderer, controls, selectedRenderPass;
 			let postProcessing;
 
 			const dummy = new THREE.Object3D();
@@ -58,50 +58,6 @@
 			// Init gui
 
 			const gui = new GUI( { width: 280 } );
-
-			/* gui.add( params, 'edgeStrength', 0.01, 10 ).onChange( function ( value ) {
-
-				outlinePass.edgeStrength = Number( value );
-
-			} );
-
-			gui.add( params, 'edgeGlow', 0.0, 1 ).onChange( function ( value ) {
-
-				outlinePass.edgeGlow = Number( value );
-
-			} );
-
-			gui.add( params, 'edgeThickness', 1, 4 ).onChange( function ( value ) {
-
-				outlinePass.edgeThickness = Number( value );
-
-			} );
-
-			gui.add( params, 'pulsePeriod', 0.0, 5 ).onChange( function ( value ) {
-
-				outlinePass.pulsePeriod = Number( value );
-
-			} );
-
-			gui.add( params, 'rotate' );
-
-			gui.add( params, 'usePatternTexture' ).onChange( function ( value ) {
-
-				outlinePass.usePatternTexture = value;
-
-			} ); */
-
-			/* gui.addColor( conf, 'visibleEdgeColor' ).onChange( function ( value ) {
-
-				outlinePass.visibleEdgeColor.set( value );
-
-			} );
-
-			gui.addColor( conf, 'hiddenEdgeColor' ).onChange( function ( value ) {
-
-				outlinePass.hiddenEdgeColor.set( value );
-
-			} ); */
 
 			init();
 
@@ -163,11 +119,14 @@
 
 						if ( child instanceof THREE.Mesh ) {
 
+							console.log( child );
+
 							child.geometry.center();
 							child.geometry.computeBoundingSphere();
 							scale = 0.2 * child.geometry.boundingSphere.radius;
 
-							const phongMaterial = new THREE.MeshPhongMaterial( { color: 0xffffff, specular: 0x111111, shininess: 5 } );
+							const phongMaterial = new THREE.MeshPhongNodeMaterial( { color: 0xffffff, specular: 0x111111, shininess: 5 } );
+							phongMaterial.mrtNode = mrt( { mask: uniform( 0.0 ) } );
 							child.material = phongMaterial;
 							child.receiveShadow = true;
 							child.castShadow = true;
@@ -192,8 +151,9 @@
 
 				for ( let i = 0; i < 20; i ++ ) {
 
-					const material = new THREE.MeshLambertMaterial();
+					const material = new THREE.MeshLambertNodeMaterial();
 					material.color.setHSL( Math.random(), 1.0, 0.3 );
+					material.mrtNode = mrt( { mask: uniform( 0 ) } );
 
 					const mesh = new THREE.Mesh( geometry, material );
 					mesh.position.x = Math.random() * 4 - 2;
@@ -206,7 +166,10 @@
 
 				}
 
-				const floorMaterial = new THREE.MeshLambertMaterial( { side: THREE.DoubleSide } );
+				const floorMaterial = new THREE.MeshLambertNodeMaterial( { side: THREE.DoubleSide } );
+				floorMaterial.mrtNode = mrt( {
+					mask: uniform( 0 )
+				} );
 
 				const floorGeometry = new THREE.PlaneGeometry( 12, 12 );
 				const floorMesh = new THREE.Mesh( floorGeometry, floorMaterial );
@@ -216,7 +179,10 @@
 				floorMesh.receiveShadow = true;
 
 				const torusGeometry = new THREE.TorusGeometry( 1, 0.3, 16, 100 );
-				const torusMaterial = new THREE.MeshPhongMaterial( { color: 0xffaaff } );
+				const torusMaterial = new THREE.MeshPhongNodeMaterial( { color: 0xffaaff } );
+				torusMaterial.mrtNode = mrt( {
+					mask: uniform( 0 )
+				} );
 				const torus = new THREE.Mesh( torusGeometry, torusMaterial );
 				torus.position.z = - 4;
 				group.add( torus );
@@ -251,12 +217,17 @@
 				} );
 
 				postProcessing = new THREE.PostProcessing( renderer );
-
 				const scenePass = pass( scene, camera );
+				scenePass.setMRT( mrt( {
+					output,
+					mask: float( 0 ),
+				} ) );
+
+				const maskPass = scenePass.getTextureNode( 'mask' );
 				selectedRenderPass = selectedPass( scene, camera, undefined );
-				nonSelectedRenderPass = nonSelectedPass( scene, camera, undefined );
 				const outlineObjectPass = step( 0.001, selectedRenderPass.getTextureNode( 'depth' ).sobel().r ).a;
-				postProcessing.outputNode = outlineObjectPass.mix( scenePass, effectController.visibleEdgeColor );
+				// postProcessing.outlineObjectPass = step( 0.001, selectedRenderPass.getTextureNode( 'depth' ).sobel().r ).a;
+				postProcessing.outputNode = maskPass.sobel().mix( scenePass, 1.0 );
 
 				window.addEventListener( 'resize', onWindowResize );
 
@@ -289,15 +260,33 @@
 
 					if ( intersects.length > 0 ) {
 
+						for ( let i = 0; i < selectedObjects.length; i ++ ) {
+
+							const material = selectedObjects[ i ].material;
+							const mask = material.mrtNode.getNode( 'mask' );
+							mask.value = 0;
+
+							selectedObjects = [];
+
+						}
+
 						const selectedObject = intersects[ 0 ].object;
 						addSelectedObject( selectedObject );
-						selectedRenderPass.selectedObjects = selectedObjects;
-						nonSelectedRenderPass.selectedObjects = selectedObjects;
+						const material = selectedObject.material;
+						const mask = material.mrtNode.getNode( 'mask' );
+						mask.value = 1;
 
 					} else {
 
-						selectedRenderPass.selectedObjects = [];
-						nonSelectedRenderPass.selectedObjects = [];
+						for ( let i = 0; i < selectedObjects.length; i ++ ) {
+
+							const material = selectedObjects[ i ].material;
+							const mask = material.mrtNode.getNode( 'mask' );
+							mask.value = 0;
+			
+						}
+
+						selectedObjects = [];
 
 					}
 
