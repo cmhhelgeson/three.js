@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js - WebGPU - Backdrop</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link type="text/css" rel="stylesheet" href="main.css">
+	</head>
+	<body>
+
+		<div id="info">
+			<a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> WebGPU - Backdrop
+		</div>
+
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../build/three.webgpu.js",
+					"three/tsl": "../build/three.webgpu.js",
+					"three/addons/": "./jsm/"
+				}
+			}
+		</script>
+
+		<script type="module">
+
+			import * as THREE from 'three';
+			import { color, viewportTopLeft, vec3, timerLocal, oscSine, output, step, pass, selectedPass, nonSelectedPass } from 'three/tsl';
+
+			import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+			let camera, scene, renderer, postProcessing, selectedRenderPass, nonSelectedRenderPass;
+			let spheres, rotate = true;
+			let mixer, clock;
+
+			let selectedObjects = [];
+
+			const raycaster = new THREE.Raycaster();
+			const mouse = new THREE.Vector2();
+
+			init();
+
+			function init() {
+
+				camera = new THREE.PerspectiveCamera( 50, window.innerWidth / window.innerHeight, 0.01, 100 );
+				camera.position.set( 1, 2, 3 );
+
+				scene = new THREE.Scene();
+				scene.backgroundNode = viewportTopLeft.y.mix( color( 0x66bbff ), color( 0x4466ff ) );
+				camera.lookAt( 0, 1, 0 );
+
+				clock = new THREE.Clock();
+
+				//lights
+
+				const light = new THREE.SpotLight( 0xffffff, 1 );
+				light.power = 2000;
+				camera.add( light );
+				scene.add( camera );
+
+				const loader = new GLTFLoader();
+				loader.load( 'models/gltf/Michelle.glb', function ( gltf ) {
+
+					const object = gltf.scene;
+					mixer = new THREE.AnimationMixer( object );
+
+					const action = mixer.clipAction( gltf.animations[ 0 ] );
+					action.play();
+
+					scene.add( object );
+
+				} );
+
+				// portals
+
+				const geometry = new THREE.SphereGeometry( .3, 32, 16 );
+
+				spheres = new THREE.Group();
+				scene.add( spheres );
+
+				function addSphere( color ) {
+
+					const distance = 1;
+					const id = spheres.children.length;
+					const rotation = THREE.MathUtils.degToRad( id * 90 );
+
+					const material = new THREE.MeshStandardNodeMaterial( { color } );
+
+					const mesh = new THREE.Mesh( geometry, material );
+					mesh.position.set(
+						Math.cos( rotation ) * distance,
+						1,
+						Math.sin( rotation ) * distance
+					);
+
+					spheres.add( mesh );
+
+				}
+
+				addSphere( 0x0000ff );
+				addSphere( 0x00ff00 );
+				addSphere( 0xff0000 );
+				addSphere( 0x00ffff );
+
+				//renderer
+
+				renderer = new THREE.WebGPURenderer( { antialias: true } );
+				renderer.setPixelRatio( window.devicePixelRatio );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				renderer.setAnimationLoop( animate );
+				renderer.toneMapping = THREE.NeutralToneMapping;
+				renderer.toneMappingExposure = 0.3;
+				document.body.appendChild( renderer.domElement );
+
+				postProcessing = new THREE.PostProcessing( renderer );
+				const basePass = pass( scene, camera );
+				selectedRenderPass = selectedPass( scene, camera );
+				const selectedAlpha = selectedRenderPass.a;
+				postProcessing.outputNode = selectedAlpha.mix( basePass, basePass.sepia() );
+
+				const controls = new OrbitControls( camera, renderer.domElement );
+				controls.target.set( 0, 1, 0 );
+				controls.addEventListener( 'start', () => rotate = false );
+				controls.addEventListener( 'end', () => rotate = true );
+				controls.update();
+
+				window.addEventListener( 'resize', onWindowResize );
+				window.addEventListener( 'pointermove', onPointerMove );
+
+				function onPointerMove( event ) {
+
+					if ( event.isPrimary === false ) return;
+
+					mouse.x = ( event.clientX / window.innerWidth ) * 2 - 1;
+					mouse.y = - ( event.clientY / window.innerHeight ) * 2 + 1;
+
+					checkIntersection();
+
+				}
+
+				function addSelectedObject( object ) {
+
+					selectedObjects = [];
+					selectedObjects.push( object );
+
+				}
+
+				function checkIntersection() {
+
+					raycaster.setFromCamera( mouse, camera );
+
+					const intersects = raycaster.intersectObject( scene, true );
+
+					if ( intersects.length > 0 ) {
+
+						const selectedObject = intersects[ 0 ].object;
+						addSelectedObject( selectedObject );
+						selectedRenderPass.selectedObjects = selectedObjects;
+						//nonSelectedRenderPass.selectedObjects = selectedObjects;
+
+					} else {
+
+						selectedRenderPass.selectedObjects = [];
+						//nonSelectedRenderPass.selectedObjects = [];
+
+					}
+
+				}
+
+			}
+
+			function onWindowResize() {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+			}
+
+			function animate() {
+
+				const delta = clock.getDelta();
+
+				if ( mixer ) mixer.update( delta );
+
+				if ( rotate ) spheres.rotation.y += delta * 0.5;
+
+				postProcessing.render();
+
+			}
+
+		</script>
+	</body>
+</html>

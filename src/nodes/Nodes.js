@@ -146,6 +146,7 @@ export { default as PixelationPassNode, pixelationPass } from './display/Pixelat
 export { sepia } from './display/SepiaNode.js';
 
 export { default as PassNode, pass, passTexture, depthPass } from './display/PassNode.js';
+export { default as SelectionPassNode, selectedPass, nonSelectedPass } from './display/SelectionPassNode.js';
 
 // code
 export { default as ExpressionNode, expression } from './code/ExpressionNode.js';
