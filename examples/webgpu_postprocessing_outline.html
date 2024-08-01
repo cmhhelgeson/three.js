@@ -27,14 +27,14 @@
 
 			import Stats from 'three/addons/libs/stats.module.js';
 			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
-			import { pass, texture3D, uniform, renderOutput, outlinePass } from 'three/tsl';
+			import { pass, clamp, mix, selectedPass, luminance, vibrance, nonSelectedPass, saturation } from 'three/tsl';
 
 			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 			import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 
 			let container, stats;
-			let camera, scene, renderer, controls, outlineRenderPass;
-			let postProcessing, effectFXAA;
+			let camera, scene, renderer, controls, selectedRenderPass, nonSelectedRenderPass;
+			let postProcessing;
 
 			const dummy = new THREE.Object3D();
 
@@ -241,17 +241,9 @@
 
 				postProcessing = new THREE.PostProcessing( renderer );
 
-				outlineRenderPass = outlinePass( scene, camera, new THREE.Vector2( window.innerWidth, window.innerHeight ), undefined, {} );
-				postProcessing.outputNode = outlineRenderPass;
-
-				const textureLoader = new THREE.TextureLoader();
-				textureLoader.load( 'textures/tri_pattern.jpg', function ( texture ) {
-
-					outlinePass.patternTexture = texture;
-					texture.wrapS = THREE.RepeatWrapping;
-					texture.wrapT = THREE.RepeatWrapping;
-
-				} );
+				selectedRenderPass = selectedPass( scene, camera, undefined );
+				nonSelectedRenderPass = nonSelectedPass( scene, camera, undefined );
+				postProcessing.outputNode = vibrance(selectedRenderPass.getTextureNode( 'depth' ).sobel();
 
 				window.addEventListener( 'resize', onWindowResize );
 
@@ -286,11 +278,13 @@
 
 						const selectedObject = intersects[ 0 ].object;
 						addSelectedObject( selectedObject );
-						outlineRenderPass.selectedObjects = selectedObjects;
+						selectedRenderPass.selectedObjects = selectedObjects;
+						nonSelectedRenderPass.selectedObjects = selectedObjects;
 
 					} else {
 
-						outlineRenderPass.selectedObjects = [];
+						selectedRenderPass.selectedObjects = [];
+						nonSelectedRenderPass.selectedObjects = [];
 
 					}
 

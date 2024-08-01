@@ -386,7 +386,6 @@
 		"webgpu_postprocessing_outline",
 		"webgpu_postprocessing_sobel",
 		"webgpu_postprocessing_transition",
-		"webgpu_postprocessing_outline",
 		"webgpu_postprocessing",
 		"webgpu_procedural_texture",
 		"webgpu_reflection",
