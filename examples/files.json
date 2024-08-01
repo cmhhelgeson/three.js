@@ -383,7 +383,6 @@
 		"webgpu_postprocessing_fxaa",
 		"webgpu_postprocessing_masking",
 		"webgpu_postprocessing_outline",
-		"webgpu_postprocessing_outline",
 		"webgpu_postprocessing_sobel",
 		"webgpu_postprocessing_transition",
 		"webgpu_postprocessing",

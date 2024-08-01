@@ -143,13 +143,8 @@ export { default as BloomNode, bloom } from './display/BloomNode.js';
 export { default as TransitionNode, transition } from './display/TransitionNode.js';
 export { default as RenderOutputNode, renderOutput } from './display/RenderOutputNode.js';
 export { default as PixelationPassNode, pixelationPass } from './display/PixelationPassNode.js';
-<<<<<<< HEAD
 export { sepia } from './display/SepiaNode.js';
-export { default as OutlinePassNode, outlinePass } from './display/OutlinePassNode.js';
-
-=======
 export { default as SelectionPassNode, selectedPass, nonSelectedPass } from './display/SelectionPassNode.js';
->>>>>>> c0ef1176bc (commit before rebase)
 export { default as PassNode, pass, passTexture, depthPass } from './display/PassNode.js';
 
 // code

@@ -27,7 +27,7 @@
 
 			import Stats from 'three/addons/libs/stats.module.js';
 			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
-			import { pass, clamp, mix, selectedPass, luminance, vibrance, nonSelectedPass, saturation } from 'three/tsl';
+			import { pass, clamp, mix, selectedPass, uniform, luminance, step, vibrance, nonSelectedPass, saturation } from 'three/tsl';
 
 			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 			import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
@@ -90,15 +90,6 @@
 				outlinePass.usePatternTexture = value;
 
 			} ); */
-
-			function Configuration() {
-
-				this.visibleEdgeColor = '#ffffff';
-				this.hiddenEdgeColor = '#190a05';
-
-			}
-
-			const conf = new Configuration();
 
 			/* gui.addColor( conf, 'visibleEdgeColor' ).onChange( function ( value ) {
 
@@ -239,11 +230,33 @@
 
 				// postprocessing
 
+				const effectController = {
+					visibleEdgeColor: uniform( new THREE.Color() ),
+					hiddenEdgeColor: uniform( new THREE.Color() )
+				};
+
+				function Configuration() {
+
+					this.visibleEdgeColor = '#ffffff';
+					this.hiddenEdgeColor = '#190a05';
+
+				}
+
+				const conf = new Configuration();
+
+				gui.addColor( conf, 'visibleEdgeColor' ).onChange( ( value ) => {
+
+					effectController.visibleEdgeColor.value.set( value );
+
+				} );
+
 				postProcessing = new THREE.PostProcessing( renderer );
 
+				const scenePass = pass( scene, camera );
 				selectedRenderPass = selectedPass( scene, camera, undefined );
 				nonSelectedRenderPass = nonSelectedPass( scene, camera, undefined );
-				postProcessing.outputNode = vibrance(selectedRenderPass.getTextureNode( 'depth' ).sobel();
+				const outlineObjectPass = step( 0.001, selectedRenderPass.getTextureNode( 'depth' ).sobel().r ).a;
+				postProcessing.outputNode = outlineObjectPass.mix( scenePass, effectController.visibleEdgeColor );
 
 				window.addEventListener( 'resize', onWindowResize );
 
