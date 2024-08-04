@@ -173,6 +173,8 @@ class PerspectiveCamera extends Camera {
 
 		this.aspect = fullWidth / fullHeight;
 
+		console.log( this.view );
+
 		if ( this.view === null ) {
 
 			this.view = {
