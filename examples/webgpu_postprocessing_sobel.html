@@ -20,7 +20,7 @@
 		<script type="module">
 
 			import * as THREE from 'three';
-			import { pass, traaPass } from 'three/tsl';
+			import { pass, traaPass, viewportTopLeft, mix, step, tslFn } from 'three/tsl';
 
 			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
@@ -29,8 +29,10 @@
 			let camera, scene, renderer;
 			let postProcessing;
 
+			const frameOn = false;
+
 			const params = {
-				enable: true
+				enable: true,
 			};
 
 			init();
@@ -79,10 +81,15 @@
 
 				postProcessing = new THREE.PostProcessing( renderer );
 
-				const scenePass = traaPass( scene, camera );
-				const scenePassColor = scenePass.getTextureNode();
+				const scenePass = traaPass( scene, camera, {
+					blendingFactor: 0.5,
+				} );
 
-				postProcessing.outputNode = scenePassColor.sobel();
+
+				postProcessing.outputNode = scenePass;
+				//const scenePassColor = scenePass.getTextureNode();
+
+				//postProcessing.outputNode = scenePassColor.sobel();
 
 				//
 
