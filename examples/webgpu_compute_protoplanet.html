@@ -349,11 +349,7 @@
 
 					return vColor;
 
-
-
-
 				} )();
-
 
 				const particles = new THREE.Points( geometry, protoPlanetMaterial );
 				particles.matrixAutoUpdate = false;
@@ -361,9 +357,6 @@
 
 				scene.add( particles );
 
-
-
-			
 				stats = new Stats();
 				container.appendChild( stats.dom );
 
@@ -415,7 +408,6 @@
 				return window.innerHeight / ( Math.tan( THREE.MathUtils.DEG2RAD * 0.5 * camera.fov ) / camera.zoom );
 
 			}
-
 
 			function animate() {
 
