@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgl - gpgpu - protoplanet</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link type="text/css" rel="stylesheet" href="main.css">
+	</head>
+	<body>
+
+		<div id="info">
+			<a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> - <span id="protoplanets"></span> webgl gpgpu debris
+		</div>
+
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../build/three.webgpu.js",
+					"three/tsl": "../build/three.webgpu.js",
+					"three/addons/": "./jsm/"
+				}
+			}
+		</script>
+
+		<script type="module">
+
+			import * as THREE from 'three';
+			import { storage, Continue, Discard, Fn, instanceIndex, If, vec2, vec3, vec4, negate, timerDelta, pow, Loop, uint, Break, min, normalize, uniform, varyingProperty, modelViewMatrix, cameraProjectionMatrix } from 'three/tsl';
+
+			import Stats from 'three/addons/libs/stats.module.js';
+			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+
+			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+			let container, stats;
+			let camera, scene, renderer, geometry;
+
+			let computeInitBuffer, computePosition, computeVelocity;
+
+			const PARTICLES = 4096;
+
+			let effectController;
+
+			init();
+
+			function init() {
+
+				container = document.createElement( 'div' );
+				document.body.appendChild( container );
+
+				camera = new THREE.PerspectiveCamera( 75, window.innerWidth / window.innerHeight, 5, 15000 );
+				camera.position.y = 120;
+				camera.position.z = 400;
+
+				scene = new THREE.Scene();
+
+				renderer = new THREE.WebGPURenderer();
+				renderer.setPixelRatio( window.devicePixelRatio );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				renderer.setAnimationLoop( animate );
+				container.appendChild( renderer.domElement );
+
+				const controls = new OrbitControls( camera, renderer.domElement );
+				controls.minDistance = 100;
+				controls.maxDistance = 1000;
+
+				effectController = {
+					// Uniforms
+					gravity: uniform( 100.0 ),
+					density: uniform( 0.45 ),
+					cameraConstant: uniform( getCameraConstant( camera ) ),
+
+					// Must restart simulation
+					radius: 300,
+					height: 8,
+					exponent: 0.4,
+					maxMass: 15.0,
+					velocity: 70,
+					velocityExponent: 0.2,
+					randVelocity: 0.001
+				};
+
+				// Create initial Proto-Planet Position and Velocity Buffers
+
+				const posArray = new Float32Array( PARTICLES * 3 );
+				const velArray = new Float32Array( PARTICLES * 3 );
+				const massArray = new Float32Array( PARTICLES );
+
+				const maxMass = effectController.maxMass * 1024 / PARTICLES;
+
+				// TODO: Parallelize
+				const fillBuffers = () => {
+
+					for ( let i = 0; i < PARTICLES; i ++ ) {
+
+						// Position
+						let x, z, rr;
+
+						do {
+
+							x = ( Math.random() * 2 - 1 );
+							z = ( Math.random() * 2 - 1 );
+							rr = x * x + z * z;
+
+						} while ( rr > 1 );
+
+						rr = Math.sqrt( rr );
+
+						const rExp = effectController.radius * Math.pow( rr, effectController.exponent );
+
+						// Velocity
+						const vel = effectController.maxVel * Math.pow( rr, effectController.velExponent );
+
+						const vx = vel * z + ( Math.random() * 2 - 1 ) * effectController.randVelocity;
+						const vy = ( Math.random() * 2 - 1 ) * effectController.randVelocity * 0.05;
+						const vz = - vel * x + ( Math.random() * 2 - 1 ) * effectController.randVelocity;
+
+						x *= rExp;
+						z *= rExp;
+						const y = ( Math.random() * 2 - 1 ) * effectController.height;
+
+						const mass = Math.random() * maxMass + 1;
+
+						// Fill in storage buffer values
+						posArray[ i * 3 + 0 ] = x;
+						posArray[ i * 3 + 1 ] = y;
+						posArray[ i * 3 + 2 ] = z;
+
+						velArray[ i * 3 + 0 ] = vx;
+						velArray[ i * 3 + 1 ] = vy;
+						velArray[ i * 3 + 2 ] = vz;
+
+						massArray[ i ] = mass;
+
+					}
+			
+				};
+
+				fillBuffers();
+
+				// Make buffers accessible via compute shaders
+
+				const positionBufferAttribute = new THREE.StorageBufferAttribute( posArray, 3 );
+				const velocityBufferAttribute = new THREE.StorageBufferAttribute( velArray, 3 );
+				const massBufferAttribute = new THREE.StorageBufferAttribute( massArray, 1 );
+			
+				const positionStorage = storage( positionBufferAttribute, 'vec3', positionBufferAttribute.count );
+				const velocityStorage = storage( velocityBufferAttribute, 'vec3', velocityBufferAttribute.count );
+				const massStorage = storage( massBufferAttribute, 'float', massBufferAttribute.count );
+			
+				const positionRead = storage( positionBufferAttribute, 'vec3', positionBufferAttribute.count ).toReadOnly();
+				const velocityRead = storage( velocityBufferAttribute, 'vec3', velocityBufferAttribute.count ).toReadOnly();
+				const massRead = storage( massBufferAttribute, 'float', massBufferAttribute.count ).toReadOnly();
+
+				// Write proto planet position and velocity compute shaders
+
+				computePosition = Fn( () => {
+
+					const position = positionStorage.element( instanceIndex );
+					const velocity = velocityStorage.element( instanceIndex ).toVar();
+					const mass = massStorage.element( instanceIndex );
+
+					If( mass.equal( 0.0 ), () => {
+
+						velocity.assign( vec3( 0.0 ) );
+
+					} );
+
+					position.addAssign( velocity.mul( timerDelta() ) );
+
+				} )().compute( PARTICLES );
+
+				const radiusFromMass = ( mass ) => {
+
+					const { density } = effectController;
+
+					const massOverDensity = mass.div( density );
+					return pow( massOverDensity.mul( 3.0 / ( 4.0 * Math.PI ) ), 1 / 3 );
+
+				};
+
+				computeVelocity = Fn( () => {
+
+					const { gravity } = effectController;
+					const pos = positionStorage.element( instanceIndex );
+					const vel = velocityStorage.element( instanceIndex );
+					const mass = massStorage.element( instanceIndex );
+
+					If( mass.equal( 0.0 ), () => {
+
+						const radius = radiusFromMass( mass );
+
+						const acceleration = vec3( 0.0 ).toVar();
+
+						Loop( { start: uint( 0 ), end: uint( PARTICLES ), type: 'uint', condition: '<' }, ( { particleIndex } ) => {
+
+							If( instanceIndex.equal( particleIndex ), () => {
+
+								Continue();
+
+							} );
+
+							const mass2 = massStorage.element( particleIndex );
+
+							If( mass.equal( 0.0 ), () => {
+
+								Continue();
+
+							} );
+
+							const pos2 = positionStorage.element( particleIndex );
+							const dPos = pos2.sub( pos );
+							const distance = length( dPos );
+
+							If( distance.equal( 0.0 ), () => {
+
+								Continue();
+
+							} );
+
+
+							const vel2 = velocityStorage.element( particleIndex );
+							const radius2 = radiusFromMass( mass2 );
+
+							If( distance.lessThan( radius.add( radius2 ) ), () => {
+
+								If( instanceIndex.lessThan( particleIndex ), () => {
+
+									const totalMass = mass.add( mass2 );
+									const velByMass = vel.mul( mass );
+									const vel2ByMass = vel2.mul( mass2 );
+
+									const newVel = ( velByMass.add( vel2ByMass ) ).div( totalMass );
+
+									// Assign
+									vel.assign( newVel );
+									mass.addAssign( mass2 );
+
+
+								} ).Else( () => {
+
+									// This particle dies
+									mass.assign( 0.0 );
+									radius.assign( 0.0 );
+									vel.assign( 0.0 );
+
+									Break();
+
+								} );
+
+							} );
+
+							const distanceSq = distance.mul( distance );
+
+							const gravityField = min( gravity.mul( mass2 ).div( distanceSq ), 1000.0 );
+
+							acceleration.addAssign( gravityField.mul( normalize( dPos ) ) );
+
+
+						} );
+
+						If( mass.equal( 0.0 ), () => {
+
+							Break();
+
+						} );
+
+						vel.addAssign( acceleration.mul( timerDelta() ) );
+
+					} );
+
+				} )().compute( PARTICLES );
+
+				// Initialize Proto Planet Geometry and Material
+
+				geometry = new THREE.BufferGeometry();
+
+				const positions = new Float32Array( PARTICLES * 3 );
+				let p = 0;
+
+				for ( let i = 0; i < PARTICLES; i ++ ) {
+
+					positions[ p ++ ] = ( Math.random() * 2 - 1 ) * effectController.radius;
+					positions[ p ++ ] = 0; //( Math.random() * 2 - 1 ) * effectController.radius;
+					positions[ p ++ ] = ( Math.random() * 2 - 1 ) * effectController.radius;
+
+				}
+
+				const uvs = new Float32Array( PARTICLES * 2 );
+				p = 0;
+
+				for ( let j = 0; j < 64; j ++ ) {
+
+					for ( let i = 0; i < 64; i ++ ) {
+
+						uvs[ p ++ ] = i / ( 64 - 1 );
+						uvs[ p ++ ] = j / ( 64 - 1 );
+
+					}
+
+				}
+
+				geometry.setAttribute( 'position', new THREE.BufferAttribute( positions, 3 ) );
+				geometry.setAttribute( 'uv', new THREE.BufferAttribute( uvs, 2 ) );
+
+				// THREE.ShaderMaterial
+				const protoPlanetMaterial = new THREE.PointsNodeMaterial();
+				const vColor = varyingProperty( 'vec4', 'vColor' );
+				protoPlanetMaterial.vertexNode = Fn( () => {
+
+					const { cameraConstant } = effectController;
+
+					const position = positionRead.element( instanceIndex );
+					const velocity = velocityRead.element( instanceIndex );
+					const mass = massRead.element( instanceIndex );
+
+					vColor.assign( vec4( 1.0, mass.div( 250.0 ), 0.0, 1.0 ) );
+
+					const mvPosition = modelViewMatrix.mul( vec4( position, 1.0 ) );
+
+					const radius = radiusFromMass( mass );
+
+					If( mass.equal( 0.0 ), () =>{
+						// Nullify scale
+					} ).Else( () => {
+
+						const pointSize = radius.mul( cameraConstant ).div( negate( mvPosition.z ) );
+
+					} );
+
+					return cameraProjectionMatrix.mul( mvPosition );
+			
+				} )();
+				protoPlanetMaterial.fragmentNode = Fn( () => {
+
+					If( vColor.y.equal( 0.0 ), () => {
+
+						Discard();
+
+					} );
+
+					const f = length( vec2( 0.5, 0.5 ) );
+
+					If( f.greaterThan( 0.5 ), () => {
+
+						Discard();
+
+					} );
+
+					return vColor;
+
+
+
+
+				} )();
+
+
+				const particles = new THREE.Points( geometry, protoPlanetMaterial );
+				particles.matrixAutoUpdate = false;
+				particles.updateMatrix();
+
+				scene.add( particles );
+
+
+
+			
+				stats = new Stats();
+				container.appendChild( stats.dom );
+
+				window.addEventListener( 'resize', onWindowResize );
+
+				const gui = new GUI( { width: 280 } );
+
+				const folder1 = gui.addFolder( 'Dynamic parameters' );
+				folder1.add( effectController.gravity, 'value', 0.0, 1000.0, 0.05 ).name( 'gravity' );
+				folder1.add( effectController.density, 'value', 0.0, 10.0, 0.001 ).name( 'density' );
+
+				const folder2 = gui.addFolder( 'Static parameters' );
+				folder2.add( effectController, 'radius', 10.0, 1000.0, 1.0 );
+				folder2.add( effectController, 'height', 0.0, 50.0, 0.01 );
+				folder2.add( effectController, 'exponent', 0.0, 2.0, 0.001 );
+				folder2.add( effectController, 'maxMass', 1.0, 50.0, 0.1 );
+				folder2.add( effectController, 'velocity', 0.0, 150.0, 0.1 );
+				folder2.add( effectController, 'velocityExponent', 0.0, 1.0, 0.01 );
+				folder2.add( effectController, 'randVelocity', 0.0, 50.0, 0.1 );
+
+				const buttonRestart = {
+					restartSimulation: function () {
+
+						fillBuffers();
+
+					}
+				};
+
+				folder2.add( buttonRestart, 'restartSimulation' );
+
+				folder1.open();
+				folder2.open();
+
+			}
+
+			function onWindowResize() {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+				effectController.cameraConstant.value = getCameraConstant( camera );
+
+			}
+
+			function getCameraConstant( camera ) {
+
+				return window.innerHeight / ( Math.tan( THREE.MathUtils.DEG2RAD * 0.5 * camera.fov ) / camera.zoom );
+
+			}
+
+
+			function animate() {
+
+				render();
+				stats.update();
+
+			}
+
+			function render() {
+
+				renderer.compute( computeVelocity );
+				renderer.compute( computePosition );
+
+				renderer.render( scene, camera );
+
+			}
+
+		</script>
+	</body>
+</html>
