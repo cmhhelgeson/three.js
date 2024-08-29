@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 	<head>
-		<title>three.js webgl - gpgpu - protoplanet</title>
+		<title>three.js webgpu - compute - protoplanet</title>
 		<meta charset="utf-8">
 		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
 		<link type="text/css" rel="stylesheet" href="main.css">
@@ -25,17 +25,20 @@
 		<script type="module">
 
 			import * as THREE from 'three';
-			import { storage, Continue, discard, length, Fn, instanceIndex, If, vec2, vec3, vec4, negate, timerDelta, pow, Loop, uint, Break, min, normalize, uniform, varyingProperty, modelViewMatrix, cameraProjectionMatrix } from 'three/tsl';
+			import { storage, storageObject, Continue, Discard, length, Fn, instanceIndex, If, vec2, float, attribute, vec3, vec4, negate, timerDelta, pow, Loop, uint, Break, min, normalize, uniform, varyingProperty, modelViewMatrix, cameraProjectionMatrix } from 'three/tsl';
 
 			import Stats from 'three/addons/libs/stats.module.js';
 			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+
+			import InstancedPoints from 'three/addons/objects/InstancedPoints.js';
+			import InstancedPointsGeometry from 'three/addons/geometries/InstancedPointsGeometry.js';
 
 			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 			let container, stats;
 			let camera, scene, renderer, geometry;
 
-			let computeInitBuffer, computePosition, computeVelocity;
+			let computePosition, computeVelocity;
 
 			const PARTICLES = 4096;
 
@@ -45,6 +48,8 @@
 
 			function init() {
 
+				// Initialize scene
+			
 				container = document.createElement( 'div' );
 				document.body.appendChild( container );
 
@@ -54,7 +59,7 @@
 
 				scene = new THREE.Scene();
 
-				renderer = new THREE.WebGPURenderer();
+				renderer = new THREE.WebGPURenderer( { antialias: true } );
 				renderer.setPixelRatio( window.devicePixelRatio );
 				renderer.setSize( window.innerWidth, window.innerHeight );
 				renderer.setAnimationLoop( animate );
@@ -66,9 +71,9 @@
 
 				effectController = {
 					// Uniforms
-					gravity: uniform( 100.0 ),
-					density: uniform( 0.45 ),
-					cameraConstant: uniform( getCameraConstant( camera ) ),
+					gravity: uniform( 100.0 ).label( 'gravity' ),
+					density: uniform( 0.45 ).label( 'density' ),
+					cameraConstant: uniform( getCameraConstant( camera ) ).label( 'cameraConstant' ),
 
 					// Must restart simulation
 					radius: 300,
@@ -85,11 +90,18 @@
 				const posArray = new Float32Array( PARTICLES * 3 );
 				const velArray = new Float32Array( PARTICLES * 3 );
 				const massArray = new Float32Array( PARTICLES );
+				const sizeArray = new Float32Array( PARTICLES );
 
-				const maxMass = effectController.maxMass * 1024 / PARTICLES;
+				const radiusFromMass = ( mass ) => {
+
+					return Math.pow( ( 3.0 / ( 4.0 * Math.PI ) ) * mass / effectController.density.value, 1.0 / 3.0 );
+
+				};
 
 				// TODO: Parallelize
 				const fillBuffers = () => {
+
+					const maxMass = effectController.maxMass * 1024 / PARTICLES;
 
 					for ( let i = 0; i < PARTICLES; i ++ ) {
 
@@ -131,6 +143,7 @@
 						velArray[ i * 3 + 2 ] = vz;
 
 						massArray[ i ] = mass;
+						sizeArray[ i ] = 2; //*// effectController.cameraConstant.value;
 
 					}
 			
@@ -138,55 +151,55 @@
 
 				fillBuffers();
 
-				// Make buffers accessible via compute shaders
+				// Initialize Proto Planet Geometry and Material
 
-				const positionBufferAttribute = new THREE.StorageBufferAttribute( posArray, 3 );
+				geometry = new InstancedPointsGeometry();
+				geometry.setPositions( posArray );
+
+				// Instance Position
+				const positionAttribute = new THREE.StorageInstancedBufferAttribute( posArray, 3 );
+				geometry.setAttribute( 'instancePosition', positionAttribute );
+				const posStorage = storage( positionAttribute, 'vec3', positionAttribute.count ).label( 'Pos' );
+
+				// Instance Velocity
 				const velocityBufferAttribute = new THREE.StorageBufferAttribute( velArray, 3 );
-				const massBufferAttribute = new THREE.StorageBufferAttribute( massArray, 1 );
-			
-				const positionStorage = storage( positionBufferAttribute, 'vec3', positionBufferAttribute.count ).label( 'Position' );
+				geometry.setAttribute( 'instanceVelocity', velocityBufferAttribute );
 				const velocityStorage = storage( velocityBufferAttribute, 'vec3', velocityBufferAttribute.count ).label( 'Velocity' );
+
+				// Instance Size
+				const sizeBufferAttribute = new THREE.StorageBufferAttribute( sizeArray, 1 );
+				geometry.setAttribute( 'instanceSize', sizeBufferAttribute );
+				const sizeStorage = storage( sizeBufferAttribute, 'float', sizeBufferAttribute.count ).label( 'Size' );
+
+				// Mass ( does not get passed in as attribute )
+				const massBufferAttribute = new THREE.StorageBufferAttribute( massArray, 1 );
 				const massStorage = storage( massBufferAttribute, 'float', massBufferAttribute.count ).label( 'Mass' );
-			
-				const positionRead = storage( positionBufferAttribute, 'vec3', positionBufferAttribute.count ).toReadOnly().label( 'PositionRead' );
-				const velocityRead = storage( velocityBufferAttribute, 'vec3', velocityBufferAttribute.count ).toReadOnly().label( 'VelocityRead' );
-				const massRead = storage( massBufferAttribute, 'float', massBufferAttribute.count ).toReadOnly().label( 'MassRead' );
+				const massRead = storageObject( massBufferAttribute, 'float', massBufferAttribute.count ).label( 'MassRead' );
 
-				// Write proto planet position and velocity compute shaders
+				geometry.instanceCount = posArray.length / 3; // this should not be necessary
 
-				computePosition = Fn( () => {
+				// Write proto planet velocity and position compute shaders
 
-					const position = positionStorage.element( instanceIndex );
-					const velocity = velocityStorage.element( instanceIndex ).toVar();
-					const mass = massStorage.element( instanceIndex );
-
-					If( mass.equal( 0.0 ), () => {
-
-						velocity.assign( vec3( 0.0 ) );
-
-					} );
-
-					position.addAssign( velocity.mul( timerDelta() ) );
-
-				} )().compute( PARTICLES );
-
-				const radiusFromMass = ( mass ) => {
+				const radiusFromMassTSL = ( mass ) => {
 
 					const { density } = effectController;
 
 					const massOverDensity = mass.div( density );
-					return pow( massOverDensity.mul( 3.0 / ( 4.0 * Math.PI ) ), 1 / 3 );
+					const piCalc = float( 3.0 ).div( 4.0 * Math.PI );
+					return pow( piCalc.mul( massOverDensity ), 1 / 3 );
 
 				};
 
 				computeVelocity = Fn( () => {
 
 					const { gravity } = effectController;
-					const pos = positionStorage.element( instanceIndex );
-					const vel = velocityStorage.element( instanceIndex );
+					const pos = posStorage.element( instanceIndex );
+					const vel = velocityStorage.element( instanceIndex ).toVar();
+					vel.name = 'vel';
 					const mass = massStorage.element( instanceIndex ).toVar();
+					mass.name = 'mass';
 
-					If( mass.equal( 0.0 ), () => {
+					If( mass.greaterThan( 0.0 ), () => {
 
 						/* When Three.js translates TSL to WGSL or GLSL code, it will often translate your code
 						/* from variables to references to mathematical calculations. For instance:
@@ -213,11 +226,13 @@
 						/*           return 3.0 + radius;
 						*/
 
-						const radius = radiusFromMass( mass ).toVar();
+						const radius = radiusFromMassTSL( mass ).toVar();
 
 						const acceleration = vec3( 0.0 ).toVar();
 
 						Loop( { start: uint( 0 ), end: uint( PARTICLES ), type: 'uint', condition: '<' }, ( { i } ) => {
+
+							// Reject comparison between two particles under certain conditions.
 
 							If( instanceIndex.equal( i ), () => {
 
@@ -225,17 +240,19 @@
 
 							} );
 
-							const mass2 = massStorage.element( i );
+							const mass2 = massStorage.element( i ).toVar();
+							mass2.name = 'mass2';
 
-							If( mass.equal( 0.0 ), () => {
+							If( mass2.equal( 0.0 ), () => {
 
 								Continue();
 
 							} );
 
-							const pos2 = positionStorage.element( i );
-							const dPos = pos2.sub( pos );
-							const distance = length( dPos );
+							// Use toVar() to prevent repeat of calculation
+							const pos2 = posStorage.element( i );
+							const posDelta = pos2.sub( pos );
+							const distance = length( posDelta ).toVar();
 
 							If( distance.equal( 0.0 ), () => {
 
@@ -245,22 +262,23 @@
 
 
 							const vel2 = velocityStorage.element( i );
-							const radius2 = radiusFromMass( mass2 );
+							const radius2 = radiusFromMassTSL( mass2 );
+
+							// Checks collision
 
 							If( distance.lessThan( radius.add( radius2 ) ), () => {
 
 								If( instanceIndex.lessThan( i ), () => {
 
-									const totalMass = mass.add( mass2 );
+									// This particle is aggregated by the other
 									const velByMass = vel.mul( mass );
 									const vel2ByMass = vel2.mul( mass2 );
-
-									const newVel = ( velByMass.add( vel2ByMass ) ).div( totalMass );
-
-									// Assign
+									const newVel = ( velByMass.add( vel2ByMass ) ).div( mass.add( mass2 ) );
+			
+									// Update velocity, mass, and radius
 									vel.assign( newVel );
 									mass.addAssign( mass2 );
-
+									radius.assign( radiusFromMassTSL( mass ) );
 
 								} ).Else( () => {
 
@@ -275,7 +293,7 @@
 									// This particle dies
 									mass.assign( 0.0 );
 									radius.assign( 0.0 );
-									vel.assign( 0.0 );
+									vel.assign( vec3( 0.0 ) );
 
 									Break();
 
@@ -283,12 +301,13 @@
 
 							} );
 
-							const distanceSq = distance.mul( distance );
+							const distanceSq = distance.mul( distance ).toVar();
+							distanceSq.name = 'distanceSq';
 
-							const gravityField = min( gravity.mul( mass2 ).div( distanceSq ), 1000.0 );
+							const gravityField = min( gravity.mul( mass2 ).div( distanceSq ), 1000.0 ).toVar();
+							gravityField.name = 'gravityField';
 
-							acceleration.addAssign( gravityField.mul( normalize( dPos ) ) );
-
+							acceleration.addAssign( gravityField.mul( normalize( posDelta ) ) );
 
 							// TODO: Investigate difference between single loop and double loop behavior
 							If( mass.equal( 0.0 ), () => {
@@ -300,71 +319,63 @@
 
 						} );
 
-						vel.addAssign( acceleration.mul( timerDelta() ) );
+						velocityStorage.element( instanceIndex ).addAssign( acceleration.mul( timerDelta() ) );
+						massStorage.element( instanceIndex ).assign( mass );
 
 					} );
 
 				} )().compute( PARTICLES );
 
-				// Initialize Proto Planet Geometry and Material
-
-				geometry = new THREE.BufferGeometry();
-
-				const positions = new Float32Array( PARTICLES * 3 );
-				let p = 0;
-
-				for ( let i = 0; i < PARTICLES; i ++ ) {
-
-					positions[ p ++ ] = ( Math.random() * 2 - 1 ) * effectController.radius;
-					positions[ p ++ ] = 0; //( Math.random() * 2 - 1 ) * effectController.radius;
-					positions[ p ++ ] = ( Math.random() * 2 - 1 ) * effectController.radius;
-
-				}
-
-				const uvs = new Float32Array( PARTICLES * 2 );
-				p = 0;
-
-				for ( let j = 0; j < 64; j ++ ) {
-
-					for ( let i = 0; i < 64; i ++ ) {
-
-						uvs[ p ++ ] = i / ( 64 - 1 );
-						uvs[ p ++ ] = j / ( 64 - 1 );
-
-					}
-
-				}
-
-				geometry.setAttribute( 'position', new THREE.BufferAttribute( positions, 3 ) );
-				geometry.setAttribute( 'uv', new THREE.BufferAttribute( uvs, 2 ) );
-
-				// THREE.ShaderMaterial
-				const protoPlanetMaterial = new THREE.PointsNodeMaterial();
-				const vColor = varyingProperty( 'vec3', 'vColor' );
-				protoPlanetMaterial.sizeNode = Fn( () => {
+				computePosition = Fn( () => {
 
 					const { cameraConstant } = effectController;
 
+					const position = posStorage.element( instanceIndex );
+					const velocity = velocityStorage.element( instanceIndex ).toVar();
+					const size = sizeStorage.element( instanceIndex );
 					const mass = massStorage.element( instanceIndex );
-					const radius = radiusFromMass( mass );
-					const mvPosition = modelViewMatrix.mul( vec4( positionRead.element( instanceIndex ), 1.0 ) );
 
-					return mass.equal( 0.0 ).cond( 0.0, radius.mul( cameraConstant ).div( negate( mvPosition.z ) ) );
+					const radius = radiusFromMassTSL( mass );
 
-				} )();
+					If( mass.equal( 0.0 ), () => {
 
-				protoPlanetMaterial.positionNode = positionRead.element( instanceIndex );
+						velocity.assign( vec3( 0.0 ) );
+						size.assign( 0.0 );
 
-				const particles = new THREE.Points( geometry, protoPlanetMaterial );
-				particles.matrixAutoUpdate = false;
-				particles.updateMatrix();
+					} ).Else( () => {
 
+						size.assign( radius.mul( cameraConstant ) );
+			
+					} );
+
+					position.addAssign( velocity.mul( timerDelta() ) );
+
+				} )().compute( PARTICLES );
+
+				// THREE.ShaderMaterial
+				const planetMaterial = new THREE.InstancedPointsNodeMaterial( {
+			
+					color: 0xffffff,
+					alphaToCoverage: true,
+			
+				} );
+			
+				const mvPosition = modelViewMatrix.mul( attribute( 'instancePosition' ) );
+				planetMaterial.pointSizeNode = float( 10.0 );//attribute( 'instanceSize' ).div( negate( mvPosition.z ) );
+				planetMaterial.pointColorNode = vec3( 1.0, massRead.element( instanceIndex ).div( 250.0 ), 0.0 );
+			
+				// No need to set positionNode as position is already handled internally.
+
+				const particles = new InstancedPoints( geometry, planetMaterial );
+				particles.scale.set( 1, 1, 1 );
 				scene.add( particles );
 
 				stats = new Stats();
 				container.appendChild( stats.dom );
 
 				window.addEventListener( 'resize', onWindowResize );
+
+				// Init Gui
 
 				const gui = new GUI( { width: 280 } );
 
@@ -404,6 +415,7 @@
 				renderer.setSize( window.innerWidth, window.innerHeight );
 
 				effectController.cameraConstant.value = getCameraConstant( camera );
+				console.log( effectController.cameraConstant.value );
 
 			}
 
@@ -422,7 +434,7 @@
 
 			function render() {
 
-				renderer.compute( computeVelocity );
+				//renderer.compute( computeVelocity );
 				renderer.compute( computePosition );
 
 				renderer.render( scene, camera );
