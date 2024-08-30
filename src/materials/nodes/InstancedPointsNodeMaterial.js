@@ -38,6 +38,8 @@ class InstancedPointsNodeMaterial extends NodeMaterial {
 
 		this.setValues( params );
 
+		console.log( this.fragmentNode );
+
 	}
 
 	setup( builder ) {
@@ -53,95 +55,103 @@ class InstancedPointsNodeMaterial extends NodeMaterial {
 		const useAlphaToCoverage = this.alphaToCoverage;
 		const useColor = this.useColor;
 
-		this.vertexNode = Fn( () => {
+		if ( ! this.vertexNode ) {
 
-			//vUv = uv;
-			varying( vec2(), 'vUv' ).assign( uv() ); // @TODO: Analyze other way to do this
+			this.vertexNode = Fn( () => {
 
-			const instancePosition = attribute( 'instancePosition' ).xyz;
+				//vUv = uv;
+				varying( vec2(), 'vUv' ).assign( uv() ); // @TODO: Analyze other way to do this
 
-			// camera space
-			const mvPos = property( 'vec4', 'mvPos' );
-			mvPos.assign( modelViewMatrix.mul( vec4( instancePosition, 1.0 ) ) );
+				const instancePosition = attribute( 'instancePosition' ).xyz;
 
-			const aspect = viewport.z.div( viewport.w );
+				// camera space
+				const mvPos = property( 'vec4', 'mvPos' );
+				mvPos.assign( modelViewMatrix.mul( vec4( instancePosition, 1.0 ) ) );
 
-			// clip space
-			const clipPos = cameraProjectionMatrix.mul( mvPos );
+				const aspect = viewport.z.div( viewport.w );
 
-			// offset in ndc space
-			const offset = property( 'vec2', 'offset' );
-			offset.assign( positionGeometry.xy );
+				// clip space
+				const clipPos = cameraProjectionMatrix.mul( mvPos );
 
-			offset.mulAssign( this.pointSizeNode ? this.pointSizeNode : materialPointWidth );
+				// offset in ndc space
+				const offset = property( 'vec2', 'offset' );
+				offset.assign( positionGeometry.xy );
 
-			offset.assign( offset.div( viewport.z ) );
-			offset.y.assign( offset.y.mul( aspect ) );
+				offset.mulAssign( this.pointSizeNode ? this.pointSizeNode : materialPointWidth );
 
-			// back to clip space
-			offset.assign( offset.mul( clipPos.w ) );
+				offset.assign( offset.div( viewport.z ) );
+				offset.y.assign( offset.y.mul( aspect ) );
 
-			//clipPos.xy += offset;
-			clipPos.assign( clipPos.add( vec4( offset, 0, 0 ) ) );
+				// back to clip space
+				offset.assign( offset.mul( clipPos.w ) );
 
-			return clipPos;
+				//clipPos.xy += offset;
+				clipPos.assign( clipPos.add( vec4( offset, 0, 0 ) ) );
 
-			//vec4 mvPosition = mvPos; // this was used for somethihng...
+				return clipPos;
 
-		} )();
+				//vec4 mvPosition = mvPos; // this was used for somethihng...
 
-		this.fragmentNode = Fn( () => {
+			} )();
 
-			const vUv = varying( vec2(), 'vUv' );
+		}
 
-			// force assignment into correct place in flow
-			const alpha = property( 'float', 'alpha' );
-			alpha.assign( 1 );
+		if ( ! this.fragmentNode ) {
 
-			const a = vUv.x;
-			const b = vUv.y;
+			this.fragmentNode = Fn( () => {
 
-			const len2 = a.mul( a ).add( b.mul( b ) );
+				const vUv = varying( vec2(), 'vUv' );
 
-			if ( useAlphaToCoverage ) {
+				// force assignment into correct place in flow
+				const alpha = property( 'float', 'alpha' );
+				alpha.assign( 1 );
 
-				// force assignment out of following 'if' statement - to avoid uniform control flow errors
-				const dlen = property( 'float', 'dlen' );
-				dlen.assign( len2.fwidth() );
+				const a = vUv.x;
+				const b = vUv.y;
 
-				alpha.assign( smoothstep( dlen.oneMinus(), dlen.add( 1 ), len2 ).oneMinus() );
+				const len2 = a.mul( a ).add( b.mul( b ) );
 
-			} else {
+				if ( useAlphaToCoverage ) {
 
-				len2.greaterThan( 1.0 ).discard();
+					// force assignment out of following 'if' statement - to avoid uniform control flow errors
+					const dlen = property( 'float', 'dlen' );
+					dlen.assign( len2.fwidth() );
 
-			}
-
-			let pointColorNode;
-
-			if ( this.pointColorNode ) {
-
-				pointColorNode = this.pointColorNode;
-
-			} else {
-
-				if ( useColor ) {
-
-					const instanceColor = attribute( 'instanceColor' );
-
-					pointColorNode = instanceColor.mul( materialColor );
+					alpha.assign( smoothstep( dlen.oneMinus(), dlen.add( 1 ), len2 ).oneMinus() );
 
 				} else {
 
-					pointColorNode = materialColor;
+					len2.greaterThan( 1.0 ).discard();
 
 				}
 
-			}
+				let pointColorNode;
 
-			return vec4( pointColorNode, alpha );
+				if ( this.pointColorNode ) {
 
-		} )();
+					pointColorNode = this.pointColorNode;
+
+				} else {
+
+					if ( useColor ) {
+
+						const instanceColor = attribute( 'instanceColor' );
+
+						pointColorNode = instanceColor.mul( materialColor );
+
+					} else {
+
+						pointColorNode = materialColor;
+
+					}
+
+				}
+
+				return vec4( pointColorNode, alpha );
+
+			} )();
+
+		}
 
 	}
 
