@@ -54,7 +54,7 @@
 		<script type="module">
 
 			import * as THREE from 'three';
-			import { storageObject, If, vec3, uniform, uv, uint, float, Fn, vec2, invocationLocalIndex, workgroupArray, uvec2, floor, instanceIndex, workgroupBarrier } from 'three/tsl';
+			import { storageObject, If, vec3, uniform, uv, uint, float, Fn, vec2, invocationLocalIndex, workgroupArray, uvec2, floor, instanceIndex, workgroupBarrier, atomicAdd } from 'three/tsl';
 
 			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
 
@@ -170,12 +170,18 @@
 
 				randomizeDataArray();
 
+				// Stores the current state of the sort.
 				const currentElementsBuffer = new THREE.StorageInstancedBufferAttribute( array, 1 );
 				const currentElementsStorage = storageObject( currentElementsBuffer, 'uint', size ).label( 'Elements' );
+				// Temporary global buffer.
 				const tempBuffer = new THREE.StorageInstancedBufferAttribute( array, 1 );
 				const tempStorage = storageObject( tempBuffer, 'uint', size ).label( 'Temp' );
+				// Holds the randomized array of elements.
 				const randomizedElementsBuffer = new THREE.StorageInstancedBufferAttribute( size, 1 );
 				const randomizedElementsStorage = storageObject( randomizedElementsBuffer, 'uint', size ).label( 'RandomizedElements' );
+				// Atomic counter value
+				const counterBuffer = new THREE.StorageBufferAttribute( 1, 1 );
+				const counterStorage = storageObject( counterBuffer, 'uint', counterBuffer.count ).toAtomic();
 
 				const getFlipIndices = ( index, blockHeight ) => {
 
@@ -214,6 +220,10 @@
 				const localCompareAndSwap = ( idxBefore, idxAfter ) => {
 
 					If( localStorage.element( idxAfter ).lessThan( localStorage.element( idxBefore ) ), () => {
+
+						counterStorage.element( 0 ).addAssign( 1 );
+
+						counterStorage.element( 0 ).atomicAdd( 1 );
 
 						const temp = localStorage.element( idxBefore ).toVar();
 						localStorage.element( idxBefore ).assign( localStorage.element( idxAfter ) );
