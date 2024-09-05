@@ -1,5 +1,5 @@
 import TempNode from '../core/TempNode.js';
-import { addMethodChaining, nodeProxy } from '../tsl/TSLCore.js';
+import { nodeProxy } from '../tsl/TSLCore.js';
 
 class AtomicFunctionNode extends TempNode {
 
@@ -9,14 +9,15 @@ class AtomicFunctionNode extends TempNode {
 
 	}
 
-	constructor( method, aNode, bNode ) {
+	constructor( method, aNode, bNode, assignToNode = null ) {
 
-		super();
+		super( 'uint' );
 
 		this.method = method;
 
 		this.aNode = aNode;
 		this.bNode = bNode;
+		this.assignToNode = assignToNode;
 
 	}
 
@@ -32,38 +33,34 @@ class AtomicFunctionNode extends TempNode {
 
 	}
 
-	generate( builder ) {
+	generate( builder, output ) {
+
+		console.log( output );
 
 		const method = this.method;
 
 		const type = this.getNodeType( builder );
+		console.log( type );
 		const inputType = this.getInputType( builder );
 
 		const a = this.aNode;
 		const b = this.bNode;
+		const assignTo = this.assignToNode;
 
 		const params = [];
 
 		params.push( `&${ a.build( builder, inputType ) }` );
 		params.push( b.build( builder, inputType ) );
 
-		return `${builder.getMethod( method, type )}( ${params.join( ', ' )} )`;
+		if ( assignTo === null ) {
 
-	}
+			builder.addLineFlowCode( `${ builder.getMethod( method, type ) }( ${params.join( ', ' )} )` );
 
-	serialize( data ) {
+		} else {
 
-		super.serialize( data );
+			return builder.format( `${ builder.getMethod( method, type ) }( ${params.join( ', ' )} )`, type, output );
 
-		data.method = this.method;
-
-	}
-
-	deserialize( data ) {
-
-		super.deserialize( data );
-
-		this.method = data.method;
+		}
 
 	}
 
@@ -83,15 +80,27 @@ AtomicFunctionNode.ATOMIC_XOR = 'atomicXor';
 
 export default AtomicFunctionNode;
 
-export const atomicLoad = /*@__PURE__*/ nodeProxy( AtomicFunctionNode, AtomicFunctionNode.ATOMIC_LOAD );
-export const atomicStore = /*@__PURE__*/ nodeProxy( AtomicFunctionNode, AtomicFunctionNode.ATOMIC_STORE );
-export const atomicAdd = /*@__PURE__*/ nodeProxy( AtomicFunctionNode, AtomicFunctionNode.ATOMIC_ADD );
-export const atomicSub = /*@__PURE__*/ nodeProxy( AtomicFunctionNode, AtomicFunctionNode.ATOMIC_SUB );
-export const atomicMax = /*@__PURE__*/ nodeProxy( AtomicFunctionNode, AtomicFunctionNode.ATOMIC_MAX );
-export const atomicMin = /*@__PURE__*/ nodeProxy( AtomicFunctionNode, AtomicFunctionNode.ATOMIC_MIN );
-export const atomicAnd = /*@__PURE__*/ nodeProxy( AtomicFunctionNode, AtomicFunctionNode.ATOMIC_AND );
-export const atomicOr = /*@__PURE__*/ nodeProxy( AtomicFunctionNode, AtomicFunctionNode.ATOMIC_OR );
-export const atomicXor = /*@__PURE__*/ nodeProxy( AtomicFunctionNode, AtomicFunctionNode.ATOMIC_XOR );
+const atomicNode = nodeProxy( AtomicFunctionNode );
 
+export const atomicFunc = ( method, aNode, bNode, assignToNode = null ) => {
 
-addMethodChaining( 'atomicAdd', atomicAdd );
+	const node = atomicNode( method, aNode, bNode, assignToNode );
+
+	if ( assignToNode === null ) {
+
+		node.append();
+
+	}
+
+	return node;
+
+};
+
+export const atomicStore = ( aNode, bNode, assignToNode ) => atomicFunc( AtomicFunctionNode.ATOMIC_STORE, aNode, bNode, assignToNode );
+export const atomicAdd = ( aNode, bNode, assignToNode ) => atomicFunc( AtomicFunctionNode.ATOMIC_ADD, aNode, bNode, assignToNode );
+export const atomicSub = ( aNode, bNode, assignToNode ) => atomicFunc( AtomicFunctionNode.ATOMIC_SUB, aNode, bNode, assignToNode );
+export const atomicMax = ( aNode, bNode, assignToNode ) => atomicFunc( AtomicFunctionNode.ATOMIC_MAX, aNode, bNode, assignToNode );
+export const atomicMin = ( aNode, bNode, assignToNode ) => atomicFunc( AtomicFunctionNode.ATOMIC_MIN, aNode, bNode, assignToNode );
+export const atomicAnd = ( aNode, bNode, assignToNode ) => atomicFunc( AtomicFunctionNode.ATOMIC_AND, aNode, bNode, assignToNode );
+export const atomicOr = ( aNode, bNode, assignToNode ) => atomicFunc( AtomicFunctionNode.ATOMIC_OR, aNode, bNode, assignToNode );
+export const atomicXor = ( aNode, bNode, assignToNode ) => atomicFunc( AtomicFunctionNode.ATOMIC_XOR, aNode, bNode, assignToNode );
