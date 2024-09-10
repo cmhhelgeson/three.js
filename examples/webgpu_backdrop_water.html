@@ -25,7 +25,7 @@
 		<script type="module">
 
 			import * as THREE from 'three';
-			import { color, vec2, pass, linearDepth, normalWorld, gaussianBlur, triplanarTexture, texture, objectPosition, screenUV, viewportLinearDepth, viewportDepthTexture, viewportSharedTexture, mx_worley_noise_float, positionWorld, timerLocal } from 'three/tsl';
+			import { color, vec2, pass, linearDepth, uniform, normalWorld, gaussianBlur, triplanarTexture, texture, objectPosition, screenUV, viewportLinearDepth, viewportDepthTexture, viewportSharedTexture, mx_worley_noise_float, positionWorld, timerLocal } from 'three/tsl';
 
 			import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -42,6 +42,14 @@
 			let controls;
 			let stats;
 
+			const effectController = {
+
+				surfaceCaustic1Size: uniform( 4.0 ),
+				surfaceCaustic2Size: uniform( 2.0 ),
+				surfaceCausticContrast: uniform( 1.4 ),
+
+			};
+
 			init();
 
 			function init() {
@@ -50,8 +58,8 @@
 				camera.position.set( 3, 2, 4 );
 
 				scene = new THREE.Scene();
-				scene.fog = new THREE.Fog( 0x0487e2, 7, 25 );
-				scene.backgroundNode = normalWorld.y.mix( color( 0x0487e2 ), color( 0x0066ff ) );
+				//scene.fog = new THREE.Fog( 0x0487e2, 7, 25 );
+				//scene.backgroundNode = normalWorld.y.mix( color( 0x0487e2 ), color( 0x0066ff ) );
 				camera.lookAt( 0, 1, 0 );
 
 				const sunLight = new THREE.DirectionalLight( 0xFFE499, 5 );
@@ -70,9 +78,9 @@
 				const waterAmbientLight = new THREE.HemisphereLight( 0x333366, 0x74ccf4, 5 );
 				const skyAmbientLight = new THREE.HemisphereLight( 0x74ccf4, 0, 1 );
 
-				scene.add( sunLight );
-				scene.add( skyAmbientLight );
-				scene.add( waterAmbientLight );
+				//scene.add( sunLight );
+				//scene.add( skyAmbientLight );
+				//scene.add( waterAmbientLight );
 
 				clock = new THREE.Clock();
 
@@ -137,11 +145,11 @@
 				const timer = timerLocal( .8 );
 				const floorUV = positionWorld.xzy;
 
-				const waterLayer0 = mx_worley_noise_float( floorUV.mul( 4 ).add( timer ) );
-				const waterLayer1 = mx_worley_noise_float( floorUV.mul( 2 ).add( timer ) );
+				const waterLayer0 = mx_worley_noise_float( floorUV.mul( effectController.surfaceCaustic1Size ).add( timer ) );
+				const waterLayer1 = mx_worley_noise_float( floorUV.mul( effectController.surfaceCaustic2Size ).add( timer ) );
 
 				const waterIntensity = waterLayer0.mul( waterLayer1 );
-				const waterColor = waterIntensity.mul( 1.4 ).mix( color( 0x0487e2 ), color( 0x74ccf4 ) );
+				const waterColor = waterIntensity.mul( effectController.surfaceCausticContrast ).mix( color( 0x0487e2 ), color( 0x74ccf4 ) );
 
 				// linearDepth() returns the linear depth of the mesh
 				const depth = linearDepth();
@@ -160,9 +168,9 @@
 				const viewportTexture = viewportSharedTexture( finalUV );
 
 				const waterMaterial = new THREE.MeshBasicNodeMaterial();
-				waterMaterial.colorNode = waterColor;
-				waterMaterial.backdropNode = depthEffect.mix( viewportSharedTexture(), viewportTexture.mul( depthRefraction.mix( 1, waterColor ) ) );
-				waterMaterial.backdropAlphaNode = depthRefraction.oneMinus();
+				waterMaterial.colorNode = depthEffect;
+				//waterMaterial.backdropNode = depthEffect.mix( viewportSharedTexture(), viewportTexture.mul( depthRefraction.mix( 1, waterColor ) ) );
+				//waterMaterial.backdropAlphaNode = depthRefraction.oneMinus();
 				waterMaterial.transparent = true;
 
 				const water = new THREE.Mesh( new THREE.BoxGeometry( 50, .001, 50 ), waterMaterial );
@@ -177,15 +185,15 @@
 
 				// caustics
 
-				const waterPosY = positionWorld.y.sub( water.position.y );
+				//const waterPosY = positionWorld.y.sub( water.position.y );
 
-				let transition = waterPosY.add( .1 ).saturate().oneMinus();
-				transition = waterPosY.lessThan( 0 ).select( transition, normalWorld.y.mix( transition, 0 ) ).toVar();
+				//let transition = waterPosY.add( .1 ).saturate().oneMinus();
+				//transition = waterPosY.lessThan( 0 ).select( transition, normalWorld.y.mix( transition, 0 ) ).toVar();
 
-				const colorNode = transition.mix( material.colorNode, material.colorNode.add( waterLayer0 ) );
+				//const colorNode = transition.mix( material.colorNode, material.colorNode.add( waterLayer0 ) );
 
 				//material.colorNode = colorNode;
-				floor.material.colorNode = colorNode;
+				//floor.material.colorNode = colorNode;
 
 				// renderer
 
@@ -214,22 +222,26 @@
 				floorPosition = new THREE.Vector3( 0, .2, 0 );
 
 				gui.add( floorPosition, 'y', - 1, 1, .001 ).name( 'position' );
+				const surfaceCausticsFolder = gui.addFolder( 'Surface Caustics' );
+				surfaceCausticsFolder.add( effectController.surfaceCaustic1Size, 'value', 1, 50, 4 ).name( 'Layer 1 Size' );
+				surfaceCausticsFolder.add( effectController.surfaceCaustic2Size, 'value', 1, 50, 2 ).name( 'Layer 2 Size' );
+				surfaceCausticsFolder.add( effectController.surfaceCausticContrast, 'value', 0.1, 20.0, 0.1 ).name( 'Layer Contrast' );
 
 				// post processing
 
 				const scenePass = pass( scene, camera );
-				const scenePassColor = scenePass.getTextureNode();
-				const scenePassDepth = scenePass.getLinearDepthNode().remapClamp( .3, .5 );
+				//const scenePassColor = scenePass.getTextureNode();
+				//const scenePassDepth = scenePass.getLinearDepthNode().remapClamp( .3, .5 );
 
-				const waterMask = objectPosition( camera ).y.greaterThan( screenUV.y.sub( .5 ).mul( camera.near ) );
+				//const waterMask = objectPosition( camera ).y.greaterThan( screenUV.y.sub( .5 ).mul( camera.near ) );
 
-				const scenePassColorBlurred = gaussianBlur( scenePassColor );
-				scenePassColorBlurred.directionNode = waterMask.select( scenePassDepth, scenePass.getLinearDepthNode().mul( 5 ) );
+				//const scenePassColorBlurred = gaussianBlur( scenePassColor );
+				//scenePassColorBlurred.directionNode = waterMask.select( scenePassDepth, scenePass.getLinearDepthNode().mul( 5 ) );
 
-				const vignet = screenUV.distance( .5 ).mul( 1.35 ).clamp().oneMinus();
+				//const vignet = screenUV.distance( .5 ).mul( 1.35 ).clamp().oneMinus();
 
 				postProcessing = new THREE.PostProcessing( renderer );
-				postProcessing.outputNode = waterMask.select( scenePassColorBlurred, scenePassColorBlurred.mul( color( 0x74ccf4 ) ).mul( vignet ) );
+				postProcessing.outputNode = scenePass;//waterMask.select( scenePassColorBlurred, scenePassColorBlurred.mul( color( 0x74ccf4 ) ).mul( vignet ) );
 
 				//
 
