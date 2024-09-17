@@ -264,6 +264,7 @@ class WebGPUBackend extends Backend {
 			}
 
 			const depthTextureData = this.get( renderContext.depthTexture );
+			console.log( depthTextureData );
 
 			const depthStencilAttachment = {
 				view: depthTextureData.texture.createView()

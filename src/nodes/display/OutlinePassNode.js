@@ -34,7 +34,6 @@ class OutlinePassNode extends PassNode {
 		// Materials
 		this._downSampleMaterial = null;
 		this._overlayMaterial = null;
-		this._material = null;
 
 		// User-adjusted uniforms
 		uniformObject = uniformObject !== undefined ? uniformObject : {};
@@ -58,8 +57,14 @@ class OutlinePassNode extends PassNode {
 		this._textureMatrix = uniform( new Matrix4() );
 
 		// Render targets
-		this._nonSelectedRT = this.createOutlinePassTarget( 'NonSelectedRT' );
-		this._selectedRT = this.createOutlinePassTarget( 'SelectedRT' );
+		this._nonSelectedRT = this.createOutlinePassTarget( 'NonSelectedRT', false );
+		this._selectedRT = this.createOutlinePassTarget( 'SelectedRT', false );
+		const sharedDepthTexture = new DepthTexture();
+		sharedDepthTexture.name = 'OutlinePassNode.SharedDepth';
+		sharedDepthTexture.isRenderTargetTexture = true;
+		this._nonSelectedRT.depthTexture = sharedDepthTexture;
+		this._selectedRT.depthTexture = sharedDepthTexture;
+
 		this._prepareMaskRT = this.createOutlinePassTarget( 'prepareMask', false );
 		this._maskDownSampleRT = this.createOutlinePassTarget( 'maskDownSamplePass', false );
 		this._overlayRT = this.createOutlinePassTarget( 'OverlayRT', false );
@@ -228,7 +233,7 @@ class OutlinePassNode extends PassNode {
 
 		// Modify clear values
 
-		// renderer.autoClear = false;
+		renderer.autoClear = false;
 		//renderer.setClearColor( 0xffffff, 1 );
 
 		// 1. Draw Non Selected objects in the depth buffer
@@ -236,6 +241,7 @@ class OutlinePassNode extends PassNode {
 		this.changeVisibilityOfSelectedObjects( false );
 
 		renderer.setRenderTarget( _nonSelectedRT );
+		renderer.clear();
 		renderer.setMRT( null );
 		renderer.render( scene, camera );
 
@@ -245,8 +251,8 @@ class OutlinePassNode extends PassNode {
 
 		// 2. Draw selected objects in the depth buffer
 		this.changeVisibilityOfNonSelectedObjects( false );
-
 		renderer.setRenderTarget( _selectedRT );
+		renderer.clear( true, false, true );
 		renderer.render( scene, camera );
 
 		// Make non selected objects visible, revert scene override material and background
@@ -255,7 +261,7 @@ class OutlinePassNode extends PassNode {
 		this._selectionCache.clear();
 
 		// 3. Prepare Mask
-		renderer.setRenderTarget( this._maskDownSampleRT );
+		/*renderer.setRenderTarget( this._maskDownSampleRT );
 		_quadMesh.material = this._downSampleMaterial;
 		_quadMesh.render( renderer );
 
@@ -264,13 +270,13 @@ class OutlinePassNode extends PassNode {
 		// 4. Overlay
 		renderer.setRenderTarget( this._overlayRT );
 		_quadMesh.material = this._overlayMaterial;
-		_quadMesh.render( renderer );
+		_quadMesh.render( renderer ); */
 
 
 
 		// Reset extant render state
 		//renderer.setClearColor( this._oldClearColor, this.oldClearAlpha );
-		//renderer.autoClear = oldAutoClear;
+		renderer.autoClear = oldAutoClear;
 
 		renderer.setRenderTarget( currentRenderTarget );
 		renderer.setMRT( currentMRT );
@@ -317,9 +323,16 @@ class OutlinePassNode extends PassNode {
 		this._edge1RT.dispose();
 		this._edge2RT.dispose();
 
-		if ( this._material !== null ) {
+		if ( this._downSampleMaterial !== null ) {
 
-			this._material.dispose();
+			this._downSampleMaterial.dispose();
+
+		}
+
+		if ( this._overlayMaterial !== null ) {
+
+			this._overlayMaterial.dispose();
+
 
 		}
 
@@ -331,7 +344,23 @@ class OutlinePassNode extends PassNode {
 
 		const uvNode = uv();
 
-		const downsample = Fn( () => {
+		const mixSelections = Fn( () => {
+
+			/*const selected = this._selectedColor.uv( uvNode );
+			const nonSelected = this._nonSelectedColor.uv( uvNode );
+
+			return nonSelected.a.mix( selected, nonSelected ); */
+
+			return this._selectedColor.uv( uvNode );
+
+
+		} );
+
+		const output = mixSelections();
+
+		return super.getLinearDepthNode( 'depth' );
+
+		/*const downsample = Fn( () => {
 
 			return this._selectedColor.uv( uvNode );
 
@@ -357,7 +386,9 @@ class OutlinePassNode extends PassNode {
 		overlayMaterial.blending = AdditiveBlending;
 		overlayMaterial.depthTest = false,
 		overlayMaterial.depthWrite = false,
-		overlayMaterial.transparent = true;
+		overlayMaterial.transparent = true; */
+
+		return this._selectedColor.a.mix( this._nonSelectedColor, this._selectedColor );
 
 	}
 
