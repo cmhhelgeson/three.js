@@ -13,7 +13,8 @@ import { uv } from '../accessors/UV.js';
 import NodeMaterial from '../../materials/nodes/NodeMaterial.js';
 import { sobel } from './SobelOperatorNode.js';
 import { gaussianBlur } from './GaussianBlurNode.js';
-import { AdditiveBlending } from '../../constants.js';
+import { AdditiveBlending, SubtractiveBlending } from '../../constants.js';
+import { perspectiveDepthToViewZ } from './ViewportDepthNode.js';
 
 const _quadMesh = new QuadMesh();
 const _size = new Vector2();
@@ -38,7 +39,7 @@ class OutlinePassNode extends PassNode {
 		// User-adjusted uniforms
 		uniformObject = uniformObject !== undefined ? uniformObject : {};
 		this.visibleEdgeColor = uniformObject.visibleEdgeColor || color( 1, 1, 1 );
-		this.hiddenEdgeColor = uniformObject.hiddenEdgeColor || color( 0.1, 0.04, 0.02 );
+		this.hiddenEdgeColor = uniformObject.hiddenEdgeColor || color( 0.1, 0.24, 0.5 );
 		this.edgeGlow = uniformObject.edgeGlow || 0.0;
 		this.usePatternTexture = uniformObject.usePatternTexture || 0;
 		this.edgeThickness = uniformObject.edgeThickness || uniform( 1.0 );
@@ -59,21 +60,17 @@ class OutlinePassNode extends PassNode {
 		// Render targets
 		this._nonSelectedRT = this.createOutlinePassTarget( 'NonSelectedRT', false );
 		this._selectedRT = this.createOutlinePassTarget( 'SelectedRT', false );
-		const sharedDepthTexture = new DepthTexture();
-		sharedDepthTexture.name = 'OutlinePassNode.SharedDepth';
-		sharedDepthTexture.isRenderTargetTexture = true;
-		this._nonSelectedRT.depthTexture = sharedDepthTexture;
-		this._selectedRT.depthTexture = sharedDepthTexture;
-
 		this._prepareMaskRT = this.createOutlinePassTarget( 'prepareMask', false );
 		this._maskDownSampleRT = this.createOutlinePassTarget( 'maskDownSamplePass', false );
 		this._overlayRT = this.createOutlinePassTarget( 'OverlayRT', false );
+		this._sceneRT = this.createOutlinePassTarget( 'SceneRT' );
 
 		// Textures
 		this._nonSelectedColor = texture( this._nonSelectedRT.texture );
 		this._selectedColor = texture( this._selectedRT.texture );
 		this._downSampledColor = texture( this._maskDownSampleRT.texture );
 		this._overlayColor = texture( this._overlayRT.texture );
+		this._sceneColor = texture( this._sceneRT.texture );
 
 		// Revert render state objects
 		this._oldClearColor = new Color();
@@ -81,19 +78,14 @@ class OutlinePassNode extends PassNode {
 
 	}
 
-	createOutlinePassTarget( name, depthWrite = true ) {
+	createOutlinePassTarget( name ) {
 
 		const rt = new RenderTarget();
 		rt.texture.name = `OutlinePassNode.${name}_color`;
-
-		if ( depthWrite ) {
-
-			const dt = new DepthTexture();
-			dt.name = `OutlinePassNode.${name}_depth`;
-			dt.isRenderTargetTexture = true;
-			rt.depthTexture = dt;
-
-		}
+		const dt = new DepthTexture();
+		dt.name = `OutlinePassNode.${name}_depth`;
+		dt.isRenderTargetTexture = true;
+		rt.depthTexture = dt;
 
 		return rt;
 
@@ -191,7 +183,7 @@ class OutlinePassNode extends PassNode {
 	}
 
 	// Create matrix that transforms world positions to texture coordinates
-	updateTextureMatrix() {
+	/*updateTextureMatrix() {
 
 		// Unlike the WebGL OutlinePass, NDC z-coordinates are already scaled to a [0, 1] range,
 		// and thus are retained in the transformation from NDC-coordinates to texture coordinates.
@@ -204,7 +196,7 @@ class OutlinePassNode extends PassNode {
 		this._textureMatrix.value.multiply( this.camera.projectionMatrix );
 		this._textureMatrix.value.multiply( this.camera.matrixWorldInverse );
 
-	}
+	} */
 
 	updateBefore( frame ) {
 
@@ -212,7 +204,7 @@ class OutlinePassNode extends PassNode {
 		// Typical PassNode setup
 
 		const { renderer } = frame;
-		const { scene, camera, _nonSelectedRT, _selectedRT } = this;
+		const { scene, camera, _selectedRT } = this;
 
 		this._pixelRatio = renderer.getPixelRatio();
 
@@ -238,21 +230,22 @@ class OutlinePassNode extends PassNode {
 
 		// 1. Draw Non Selected objects in the depth buffer
 		this.updateSelectionCache();
-		this.changeVisibilityOfSelectedObjects( false );
+		//this.changeVisibilityOfSelectedObjects( false );
 
-		renderer.setRenderTarget( _nonSelectedRT );
+		renderer.setRenderTarget( this._sceneRT );
 		renderer.clear();
 		renderer.setMRT( null );
 		renderer.render( scene, camera );
 
 		// Make selected objects visible
-		this.changeVisibilityOfSelectedObjects( true );
+		//this.changeVisibilityOfSelectedObjects( true );
 		this._visibilityCache.clear();
 
 		// 2. Draw selected objects in the depth buffer
 		this.changeVisibilityOfNonSelectedObjects( false );
+
 		renderer.setRenderTarget( _selectedRT );
-		renderer.clear( true, false, true );
+		renderer.clear();
 		renderer.render( scene, camera );
 
 		// Make non selected objects visible, revert scene override material and background
@@ -261,18 +254,9 @@ class OutlinePassNode extends PassNode {
 		this._selectionCache.clear();
 
 		// 3. Prepare Mask
-		/*renderer.setRenderTarget( this._maskDownSampleRT );
-		_quadMesh.material = this._downSampleMaterial;
-		_quadMesh.render( renderer );
-
-		// Do sobel and blur with existing libraries
-
-		// 4. Overlay
-		renderer.setRenderTarget( this._overlayRT );
+		renderer.setRenderTarget( this._sceneRT );
 		_quadMesh.material = this._overlayMaterial;
-		_quadMesh.render( renderer ); */
-
-
+		_quadMesh.render( renderer );
 
 		// Reset extant render state
 		//renderer.setClearColor( this._oldClearColor, this.oldClearAlpha );
@@ -294,20 +278,16 @@ class OutlinePassNode extends PassNode {
 		this.renderTarget.setSize( effectiveWidth, effectiveHeight );
 		this._nonSelectedRT.setSize( effectiveWidth, effectiveHeight );
 		this._selectedRT.setSize( effectiveWidth, effectiveHeight );
+		this._sceneRT.setSize( effectiveWidth, effectiveHeight );
 		this._overlayRT.setSize( effectiveWidth, effectiveHeight );
 
 		let resx = Math.round( effectiveWidth / this.downSampleRatio );
 		let resy = Math.round( effectiveHeight / this.downSampleRatio );
 		this._maskDownSampleRT.setSize( resx, resy );
-		//this._blur1RT.setSize( resx, resy );
-		//this._edge1RT.setSize( resx, resy );
-		//this._texSize.value.set( resx, resy );
 
 		resx = Math.round( resx / 2 );
 		resy = Math.round( resy / 2 );
 
-		//this._blur2RT.setSize( resx, resy );
-		//this._edge2RT.setSize( resx, resy );
 
 	}
 
@@ -318,10 +298,6 @@ class OutlinePassNode extends PassNode {
 		this._nonSelectedRT.dispose();
 		this._selectedRT.dispose();
 		this._maskDownSampleRT.dispose();
-		this._blur1RT.dispose();
-		this._blur2RT.dispose();
-		this._edge1RT.dispose();
-		this._edge2RT.dispose();
 
 		if ( this._downSampleMaterial !== null ) {
 
@@ -344,51 +320,30 @@ class OutlinePassNode extends PassNode {
 
 		const uvNode = uv();
 
-		const mixSelections = Fn( () => {
+		const edgeOverlay = Fn( () => {
 
-			/*const selected = this._selectedColor.uv( uvNode );
-			const nonSelected = this._nonSelectedColor.uv( uvNode );
+			const edgePass = sobel( this._selectedColor.uv( uvNode ).a );
 
-			return nonSelected.a.mix( selected, nonSelected ); */
+			//const sceneViewZ = perspectiveDepthToViewZ( this._sceneColor, this._cameraNear, this._cameraFar );
+			//const selectedViewZ = perspectiveDepthToViewZ( this._selectedColor, this._cameraNear, this._cameraFar );
 
-			return this._selectedColor.uv( uvNode );
+			//let test;
 
+			const coloredEdgePass = edgePass.r.mix( vec3( 0.0 ), this.hiddenEdgeColor );
 
-		} );
-
-		const output = mixSelections();
-
-		return super.getLinearDepthNode( 'depth' );
-
-		/*const downsample = Fn( () => {
-
-			return this._selectedColor.uv( uvNode );
+			return coloredEdgePass;
 
 		} );
-
-		const edgePass = gaussianBlur( sobel( this._downSampledColor.a ) ).renderOutput();
-
-		const overlay = Fn( () => {
-
-			return edgePass.r;
-
-
-		} );
-
-		const downSampleMaterial = this._downSampleMaterial || ( this._downSampleMaterial = new NodeMaterial() );
-		downSampleMaterial.fragmentNode = downsample().context( builder.getSharedContext() );
-		downSampleMaterial.name = 'Downsample';
-		downSampleMaterial.needsUpdate = true;
 
 		const overlayMaterial = this._overlayMaterial || ( this._overlayMaterial = new NodeMaterial() );
-		overlayMaterial.fragmentNode = overlay().context( builder.getSharedContext() );
+		overlayMaterial.fragmentNode = edgeOverlay().context( builder.getSharedContext() );
 		overlayMaterial.name = 'Overlay';
 		overlayMaterial.blending = AdditiveBlending;
 		overlayMaterial.depthTest = false,
 		overlayMaterial.depthWrite = false,
-		overlayMaterial.transparent = true; */
+		overlayMaterial.transparent = true;
 
-		return this._selectedColor.a.mix( this._nonSelectedColor, this._selectedColor );
+		return this._sceneColor;
 
 	}
 

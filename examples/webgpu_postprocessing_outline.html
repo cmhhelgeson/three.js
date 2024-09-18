@@ -205,6 +205,7 @@
 				const outlineEffect = outlinePass( new THREE.Vector2( window.innerWidth, window.innerHeight ), scene, camera );
 				postProcessing.outputNode = outlineEffect;
 
+			
 				window.addEventListener( 'resize', onWindowResize );
 
 				renderer.domElement.style.touchAction = 'none';
