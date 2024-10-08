@@ -25,7 +25,7 @@
 		<script type="module">
 
 			import * as THREE from 'three';
-			import { color, vec2, pass, linearDepth, uniform, normalWorld, gaussianBlur, triplanarTexture, texture, objectPosition, screenUV, viewportLinearDepth, viewportDepthTexture, viewportSharedTexture, mx_worley_noise_float, positionWorld, timerLocal } from 'three/tsl';
+			import { color, uniform, vec2, pass, linearDepth, normalWorld, gaussianBlur, triplanarTexture, texture, objectPosition, screenUV, viewportLinearDepth, viewportDepthTexture, viewportSharedTexture, mx_worley_noise_float, positionWorld, timerLocal } from 'three/tsl';
 
 			import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -42,15 +42,9 @@
 			let controls;
 			let stats;
 
-			const effectController = {
-
-				surfaceCaustic1Size: uniform( 4.0 ),
-				surfaceCaustic2Size: uniform( 2.0 ),
-				surfaceCausticContrast: uniform( 1.4 ),
-
-			};
-
-			init();
+			const sunIntensity = 5;
+			const skyAmbientIntensity = 1;
+			const waterAmbientIntensity = 5;
 
 			function init() {
 
@@ -58,11 +52,11 @@
 				camera.position.set( 3, 2, 4 );
 
 				scene = new THREE.Scene();
-				//scene.fog = new THREE.Fog( 0x0487e2, 7, 25 );
-				//scene.backgroundNode = normalWorld.y.mix( color( 0x0487e2 ), color( 0x0066ff ) );
+				scene.fog = new THREE.Fog( 0x0487e2, 7, 25 );
+				scene.backgroundNode = normalWorld.y.mix( color( 0x0487e2 ), color( 0x0066ff ) );
 				camera.lookAt( 0, 1, 0 );
 
-				const sunLight = new THREE.DirectionalLight( 0xFFE499, 5 );
+				const sunLight = new THREE.DirectionalLight( 0xFFE499, sunIntensity );
 				sunLight.castShadow = true;
 				sunLight.shadow.camera.near = .1;
 				sunLight.shadow.camera.far = 5;
@@ -75,12 +69,12 @@
 				sunLight.shadow.bias = - 0.001;
 				sunLight.position.set( .5, 3, .5 );
 
-				const waterAmbientLight = new THREE.HemisphereLight( 0x333366, 0x74ccf4, 5 );
-				const skyAmbientLight = new THREE.HemisphereLight( 0x74ccf4, 0, 1 );
+				const waterAmbientLight = new THREE.HemisphereLight( 0x333366, 0x74ccf4, waterAmbientIntensity );
+				const skyAmbientLight = new THREE.HemisphereLight( 0x74ccf4, 0, skyAmbientIntensity );
 
-				//scene.add( sunLight );
-				//scene.add( skyAmbientLight );
-				//scene.add( waterAmbientLight );
+				scene.add( sunLight );
+				scene.add( skyAmbientLight );
+				scene.add( waterAmbientLight );
 
 				clock = new THREE.Clock();
 
@@ -145,11 +139,15 @@
 				const timer = timerLocal( .8 );
 				const floorUV = positionWorld.xzy;
 
-				const waterLayer0 = mx_worley_noise_float( floorUV.mul( effectController.surfaceCaustic1Size ).add( timer ) );
-				const waterLayer1 = mx_worley_noise_float( floorUV.mul( effectController.surfaceCaustic2Size ).add( timer ) );
+				const waterLayer0Size = uniform( 4 );
+				const waterLayer1Size = uniform( 2 );
+
+				const waterLayer0 = mx_worley_noise_float( floorUV.mul( waterLayer0Size ).add( timer ) );
+				const waterLayer1 = mx_worley_noise_float( floorUV.mul( waterLayer1Size ).add( timer ) );
 
 				const waterIntensity = waterLayer0.mul( waterLayer1 );
-				const waterColor = waterIntensity.mul( effectController.surfaceCausticContrast ).mix( color( 0x0487e2 ), color( 0x74ccf4 ) );
+				const waterContrast = uniform( 1.4 );
+				const waterColor = waterIntensity.mul( waterContrast ).mix( color( 0x0487e2 ), color( 0x74ccf4 ) );
 
 				// linearDepth() returns the linear depth of the mesh
 				const depth = linearDepth();
@@ -168,9 +166,9 @@
 				const viewportTexture = viewportSharedTexture( finalUV );
 
 				const waterMaterial = new THREE.MeshBasicNodeMaterial();
-				waterMaterial.colorNode = depthEffect;
-				//waterMaterial.backdropNode = depthEffect.mix( viewportSharedTexture(), viewportTexture.mul( depthRefraction.mix( 1, waterColor ) ) );
-				//waterMaterial.backdropAlphaNode = depthRefraction.oneMinus();
+				waterMaterial.colorNode = waterColor;
+				waterMaterial.backdropNode = depthEffect.mix( viewportSharedTexture(), viewportTexture.mul( depthRefraction.mix( 1, waterColor ) ) );
+				waterMaterial.backdropAlphaNode = depthRefraction.oneMinus();
 				waterMaterial.transparent = true;
 
 				const water = new THREE.Mesh( new THREE.BoxGeometry( 50, .001, 50 ), waterMaterial );
@@ -185,19 +183,19 @@
 
 				// caustics
 
-				//const waterPosY = positionWorld.y.sub( water.position.y );
+				const waterPosY = positionWorld.y.sub( water.position.y );
 
-				//let transition = waterPosY.add( .1 ).saturate().oneMinus();
-				//transition = waterPosY.lessThan( 0 ).select( transition, normalWorld.y.mix( transition, 0 ) ).toVar();
+				let transition = waterPosY.add( .1 ).saturate().oneMinus();
+				transition = waterPosY.lessThan( 0 ).select( transition, normalWorld.y.mix( transition, 0 ) ).toVar();
 
-				//const colorNode = transition.mix( material.colorNode, material.colorNode.add( waterLayer0 ) );
+				const colorNode = transition.mix( material.colorNode, material.colorNode.add( waterLayer0 ) );
 
 				//material.colorNode = colorNode;
-				//floor.material.colorNode = colorNode;
+				floor.material.colorNode = colorNode;
 
 				// renderer
 
-				renderer = new THREE.WebGPURenderer( /*{ antialias: true }*/ );
+				renderer = new THREE.WebGPURenderer( { forceWebGL: true } );
 				renderer.setPixelRatio( window.devicePixelRatio );
 				renderer.setSize( window.innerWidth, window.innerHeight );
 				renderer.setAnimationLoop( animate );
@@ -221,27 +219,111 @@
 
 				floorPosition = new THREE.Vector3( 0, .2, 0 );
 
-				gui.add( floorPosition, 'y', - 1, 1, .001 ).name( 'position' );
-				const surfaceCausticsFolder = gui.addFolder( 'Surface Caustics' );
-				surfaceCausticsFolder.add( effectController.surfaceCaustic1Size, 'value', 1, 50, 4 ).name( 'Layer 1 Size' );
-				surfaceCausticsFolder.add( effectController.surfaceCaustic2Size, 'value', 1, 50, 2 ).name( 'Layer 2 Size' );
-				surfaceCausticsFolder.add( effectController.surfaceCausticContrast, 'value', 0.1, 20.0, 0.1 ).name( 'Layer Contrast' );
-
 				// post processing
 
 				const scenePass = pass( scene, camera );
-				//const scenePassColor = scenePass.getTextureNode();
-				//const scenePassDepth = scenePass.getLinearDepthNode().remapClamp( .3, .5 );
+				const scenePassColor = scenePass.getTextureNode();
+				const scenePassDepth = scenePass.getLinearDepthNode().remapClamp( .3, .5 );
 
-				//const waterMask = objectPosition( camera ).y.greaterThan( screenUV.y.sub( .5 ).mul( camera.near ) );
+				const waterMask = objectPosition( camera ).y.greaterThan( screenUV.y.sub( .5 ).mul( camera.near ) );
 
-				//const scenePassColorBlurred = gaussianBlur( scenePassColor );
-				//scenePassColorBlurred.directionNode = waterMask.select( scenePassDepth, scenePass.getLinearDepthNode().mul( 5 ) );
+				const scenePassColorBlurred = gaussianBlur( scenePassColor );
+				scenePassColorBlurred.directionNode = waterMask.select( scenePassDepth, scenePass.getLinearDepthNode().mul( 5 ) );
 
-				//const vignet = screenUV.distance( .5 ).mul( 1.35 ).clamp().oneMinus();
+				const vignet = screenUV.distance( .5 ).mul( 1.35 ).clamp().oneMinus();
 
 				postProcessing = new THREE.PostProcessing( renderer );
-				postProcessing.outputNode = scenePass;//waterMask.select( scenePassColorBlurred, scenePassColorBlurred.mul( color( 0x74ccf4 ) ).mul( vignet ) );
+				postProcessing.outputNode = waterMask.select( scenePassColorBlurred, scenePassColorBlurred.mul( color( 0x74ccf4 ) ).mul( vignet ) );
+
+				const effectController = {
+
+					toggleSun: function () {
+
+						const intensity = sunLight.intensity === sunIntensity ? 0 : sunIntensity;
+						sunLight.intensity = intensity;
+			
+					},
+			
+					toggleSkyAmbient: function () {
+
+						const intensity = skyAmbientLight.intensity === skyAmbientIntensity ? 0 : skyAmbientIntensity;
+						skyAmbientLight.intensity = intensity;
+			
+					},
+			
+					toggleWaterAmbient: function () {
+
+						const intensity = waterAmbientLight.intensity === waterAmbientIntensity ? 0 : waterAmbientIntensity;
+						waterAmbientLight.intensity = intensity;
+			
+					},
+
+					sceneBackground: 'normal',
+					rippleContrast: 1.4,
+					rippleLayer0Size: 4,
+					rippleLayer1Size: 2,
+					waterTransparency: true,
+
+				};
+
+				gui.add( floorPosition, 'y', - 1, 1, .001 ).name( 'position' );
+				const lightsFolder = gui.addFolder( 'Lights' );
+				lightsFolder.add( effectController, 'toggleSun' );
+				lightsFolder.add( effectController, 'toggleSkyAmbient' );
+				lightsFolder.add( effectController, 'toggleWaterAmbient' );
+				lightsFolder.add( effectController, 'sceneBackground', [ 'normal', 'dark', 'none' ] ).onChange( () =>{
+			
+					switch ( effectController.sceneBackground ) {
+
+						case 'normal': {
+
+							scene.backgroundNode = normalWorld.y.mix( color( 0x0487e2 ), color( 0x0066ff ) );
+							break;
+
+						}
+
+						case 'dark': {
+
+							scene.backgroundNode = normalWorld.y.mix( color( 0 ), color( 0x0066ff ) );
+							break;
+
+						}
+
+						case 'none': {
+
+							scene.backgroundNode = color( 0 );
+							break;
+			
+						}
+
+					}
+
+					scene.backgroundNode.needsUpdate = true;
+			
+				} );
+
+				const waterSurfaceFolder = gui.addFolder( 'Water Surface Folder' );
+				waterSurfaceFolder.add( effectController, 'rippleContrast', 0, 10.0, 0.1 ).onChange( () => {
+
+					waterContrast.value = effectController.rippleContrast;
+
+				} );
+				waterSurfaceFolder.add( effectController, 'rippleLayer0Size', 0, 50, 1 ).onChange( () => {
+
+					waterLayer0Size.value = effectController.rippleLayer0Size;
+
+				} );
+				waterSurfaceFolder.add( effectController, 'rippleLayer1Size', 0, 50, 1 ).onChange( () => {
+
+					waterLayer1Size.value = effectController.rippleLayer1Size;
+
+				} );
+				waterSurfaceFolder.add( effectController, 'waterTransparency' ).onChange( () => {
+
+					waterMaterial.transparent = effectController.waterTransparency;
+
+			
+				} );
 
 				//
 
@@ -286,6 +368,8 @@
 				postProcessing.render();
 
 			}
+
+			init();
 
 		</script>
 	</body>
