@@ -130,6 +130,65 @@
 				const heightStorage = instancedArray( heightArray ).label( 'Height' );
 				const prevHeightStorage = instancedArray( prevHeightArray ).label( 'PrevHeight' );
 
+				const NeighborIndicesStruct = struct( {
+					northIndex: 'uint',
+					eastIndex: 'uint',
+					southIndex: 'uint',
+					westIndex: 'uint',
+				} );
+
+				const NeighborStruct = struct( {
+					north: 'float',
+					east: 'float',
+					south: 'float',
+					west: 'float'
+				} );
+
+				const GetNeighborIndices = Fn( ( [ index ] ) => {
+
+					const width = uint( WIDTH );
+
+					// Get 2-D compute coordinate from one-dimensional instanceIndex. The calculation will
+					// still work even if you dispatch your compute shader 2-dimensionally, since within a compute
+					// context, instanceIndex is a 1-dimensional value derived from the workgroup dimensions.
+			
+					// Cast to int to prevent unintended index overflow upon subtraction.
+					const x = int( index.modInt( WIDTH ) );
+					const y = int( index.div( WIDTH ) );
+
+					// The original shader accesses height via texture uvs. However, unlike with textures, we can't
+					// access areas that are out of bounds. Accordingly, we emulate the Clamp to Edge Wrapping
+					// behavior of accessing a DataTexture with out of bounds uvs.
+
+					const leftX = max( 0, x.sub( 1 ) );
+					const rightX = min( x.add( 1 ), width.sub( 1 ) );
+
+					const bottomY = max( 0, y.sub( 1 ) );
+					const topY = min( y.add( 1 ), width.sub( 1 ) );
+
+					const neighborIndices = NeighborIndicesStruct();
+			
+					const westIndex = y.mul( width ).add( leftX );
+					const eastIndex = y.mul( width ).add( rightX );
+			
+					const southIndex = bottomY.mul( width ).add( x );
+					const northIndex = topY.mul( width ).add( x );
+
+					neighborIndices.get( 'northIndex' ).assign( northIndex );
+					neighborIndices.get( 'southIndex' ).assign( southIndex );
+					neighborIndices.get( 'eastIndex' ).assign( eastIndex );
+					neighborIndices.get( 'westIndex' ).assign( westIndex );
+
+					return neighborIndices;
+
+				} ).setLayout( {
+					name: 'GetNeighborIndices',
+					type: 'StructType0',
+					inputs: [
+						{ name: 'index', type: 'uint' }
+					]
+				} );
+
 				// Get Indices of Neighbor Values of an Index in the Simulation Grid
 				const getNeighborIndicesTSL = ( index ) => {
 
@@ -177,6 +236,21 @@
 
 				};
 
+				const GetNeighborValues = ( index, store ) => {
+
+					const neighborIndices = GetNeighborIndices( index ).toVar( 'neighborIndices' );
+
+					const neighbors = NeighborStruct().toVar( 'neighborValues' );
+
+					neighbors.get( 'north' ).assign( store.element( neighborIndices.get( 'northIndex' ) ) );
+					neighbors.get( 'south' ).assign( store.element( neighborIndices.get( 'southIndex' ) ) );
+					neighbors.get( 'east' ).assign( store.element( neighborIndices.get( 'eastIndex' ) ) );
+					neighbors.get( 'west' ).assign( store.element( neighborIndices.get( 'westIndex' ) ) );
+
+					return neighbors;
+
+				};
+
 				// Get new normals of simulation area.
 				const getNormalsFromHeightTSL = ( index, store ) => {
 
@@ -196,9 +270,9 @@
 					const height = heightStorage.element( instanceIndex ).toVar();
 					const prevHeight = prevHeightStorage.element( instanceIndex ).toVar();
 
-					const { north, south, east, west } = getNeighborValuesTSL( instanceIndex, heightStorage );
+					const neighbors = GetNeighborValues( instanceIndex, heightStorage );
 
-					const neighborHeight = north.add( south ).add( east ).add( west );
+					const neighborHeight = neighbors.get( 'north' ).add( neighbors.get( 'south' ) );
 					neighborHeight.mulAssign( 0.5 );
 					neighborHeight.subAssign( prevHeight );
 
