@@ -130,19 +130,35 @@
 				const heightStorage = instancedArray( heightArray ).label( 'Height' );
 				const prevHeightStorage = instancedArray( prevHeightArray ).label( 'PrevHeight' );
 
-				const NeighborIndicesStruct = struct( {
+				const NeighborIndicesStructure = {
 					northIndex: 'uint',
 					eastIndex: 'uint',
 					southIndex: 'uint',
 					westIndex: 'uint',
-				} );
-
-				const NeighborStruct = struct( {
+				};
+				const NeighborValuesStructure = {
 					north: 'float',
 					east: 'float',
 					south: 'float',
 					west: 'float'
-				} );
+				};
+
+				const NeighborIndicesStruct = struct( NeighborIndicesStructure, 'NeighborIndicesStructType' );
+				const NeighborValuesStruct = struct( NeighborValuesStructure, 'NeighborValuesStructType' );
+
+				const destructureStruct = ( structure, structureNode ) => {
+
+					const retObj = {};
+					for ( const property in structure ) {
+
+						retObj[ property ] = structureNode.get( property );
+
+					}
+
+					return retObj;
+
+				};
+
 
 				const GetNeighborIndices = Fn( ( [ index ] ) => {
 
@@ -183,7 +199,7 @@
 
 				} ).setLayout( {
 					name: 'GetNeighborIndices',
-					type: 'StructType0',
+					type: 'NeighborIndicesStructType',
 					inputs: [
 						{ name: 'index', type: 'uint' }
 					]
@@ -238,16 +254,16 @@
 
 				const GetNeighborValues = ( index, store ) => {
 
-					const neighborIndices = GetNeighborIndices( index ).toVar( 'neighborIndices' );
+					const { northIndex, southIndex, eastIndex, westIndex } = destructureStruct( NeighborIndicesStructure, GetNeighborIndices( index ).toVar() );
 
-					const neighbors = NeighborStruct().toVar( 'neighborValues' );
+					const neighborValues = NeighborValuesStruct();
 
-					neighbors.get( 'north' ).assign( store.element( neighborIndices.get( 'northIndex' ) ) );
-					neighbors.get( 'south' ).assign( store.element( neighborIndices.get( 'southIndex' ) ) );
-					neighbors.get( 'east' ).assign( store.element( neighborIndices.get( 'eastIndex' ) ) );
-					neighbors.get( 'west' ).assign( store.element( neighborIndices.get( 'westIndex' ) ) );
+					neighborValues.get( 'north' ).assign( store.element( northIndex ) );
+					neighborValues.get( 'south' ).assign( store.element( southIndex ) );
+					neighborValues.get( 'east' ).assign( store.element( eastIndex ) );
+					neighborValues.get( 'west' ).assign( store.element( westIndex ) );
 
-					return neighbors;
+					return neighborValues;
 
 				};
 
@@ -270,9 +286,9 @@
 					const height = heightStorage.element( instanceIndex ).toVar();
 					const prevHeight = prevHeightStorage.element( instanceIndex ).toVar();
 
-					const neighbors = GetNeighborValues( instanceIndex, heightStorage );
+					const { north, south, east, west } = destructureStruct( NeighborValuesStructure, GetNeighborValues( instanceIndex, heightStorage ) );
 
-					const neighborHeight = neighbors.get( 'north' ).add( neighbors.get( 'south' ) ).add( neighbors.get( 'east' ) ).add( neighbors.get( 'west' ) );
+					const neighborHeight = north.add( south ).add( east ).add( west );
 					neighborHeight.mulAssign( 0.5 );
 					neighborHeight.subAssign( prevHeight );
 
@@ -300,10 +316,10 @@
 					const prevHeight = prevHeightStorage.element( instanceIndex ).toVar();
 
 					// Get neighboring height values.
-					const { north: northH, south: southH, east: eastH, west: westH } = getNeighborValuesTSL( instanceIndex, heightStorage );
+					const { north: northH, south: southH, east: eastH, west: westH } = destructureStruct( NeighborValuesStructure, GetNeighborValues( instanceIndex, heightStorage ) );
 			
 					// Get neighboring prev height values.
-					const { north: northP, south: southP, east: eastP, west: westP } = getNeighborValuesTSL( instanceIndex, prevHeightStorage );
+					const { north: northP, south: southP, east: eastP, west: westP } = destructureStruct( NeighborValuesStructure, GetNeighborValues( instanceIndex, prevHeightStorage ) );
 
 					height.addAssign( northH.add( southH ).add( eastH ).add( westH ) );
 					prevHeight.addAssign( northP.add( southP ).add( eastP ).add( westP ) );
@@ -373,7 +389,7 @@
 				const SphereStruct = struct( {
 					position: 'vec3',
 					velocity: 'vec2'
-				} );
+				}, 'SphereStructType' );
 
 				// Sphere Instance Storage
 				const sphereVelocityStorage = instancedArray( sphereArray, SphereStruct ).label( 'SphereData' );
