@@ -272,7 +272,7 @@
 
 					const neighbors = GetNeighborValues( instanceIndex, heightStorage );
 
-					const neighborHeight = neighbors.get( 'north' ).add( neighbors.get( 'south' ) );
+					const neighborHeight = neighbors.get( 'north' ).add( neighbors.get( 'south' ) ).add( neighbors.get( 'east' ) ).add( neighbors.get( 'west' ) );
 					neighborHeight.mulAssign( 0.5 );
 					neighborHeight.subAssign( prevHeight );
 

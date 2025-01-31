@@ -88,6 +88,12 @@ class VarNode extends Node {
 
 	}
 
+	getMemberType( builder, name ) {
+
+		return this.node.getMemberType( builder, name );
+
+	}
+
 	getNodeType( builder ) {
 
 		return this.node.getNodeType( builder );
