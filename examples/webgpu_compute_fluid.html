@@ -18,9 +18,10 @@
 		<script type="importmap">
 			{
 				"imports": {
-					"three": "../build/three.module.js",
-					"three/addons/": "./jsm/",
-					"three/nodes": "./jsm/nodes/Nodes.js"
+					"three": "../build/three.webgpu.js",
+					"three/webgpu": "../build/three.webgpu.js",
+					"three/tsl": "../build/three.tsl.js",
+					"three/addons/": "./jsm/"
 				}
 			}
 		</script>
@@ -29,11 +30,8 @@
 
 			import * as THREE from 'three';
 			// In TSL, unless directly operating on a node, nearly every function you deploy needs to be imported from Nodes.js
-			import { vec2, vec3, vec4, sqrt, sign, mix, smoothstep, step, radians, atan2, cos, sin, clamp, length, abs, min, max, float, timerLocal, timerDelta, cond, positionGeometry, varying, varyingProperty, floor, uv, remainder, If, tslFn, storageTexture, expression, MeshBasicNodeMaterial, temp, negate, storage, storageReadOnly, wgslFn, code, instanceIndex, uniform, Return, texture, fract, not } from 'three/nodes';
-			import WebGPU from 'three/addons/capabilities/WebGPU.js';
-			import WebGPURenderer from 'three/addons/renderers/webgpu/WebGPURenderer.js';
-			import StorageTexture from 'three/addons/renderers/common/StorageTexture.js';
-			import StorageBufferAttribute from 'three/addons/renderers/common/StorageBufferAttribute.js';
+			import { vec2, vec3, vec4, rotate, sqrt, sign, mix, uint, Fn, time, smoothstep, step, radians, atan, cos, sin, clamp, length, abs, min, max, float, timerDelta, cond, positionGeometry, varying, varyingProperty, floor, uv, If, temp, negate, storage, wgslFn, code, instanceIndex, uniform, Return, texture, fract, not } from 'three/tsl';
+
 			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
 
 			// Define objects shared across scenes
@@ -59,8 +57,20 @@
 			let simHeight, cScale, simWidth, domainHeight, domainWidth, res;
 
 			// UTILITY FUNCTIONS
-			// Functions designated for use in TSL blocks have TSL appended to their names.
-			// In a TSL utility function, node arguments are appended with 'Node'
+			// All functions use camelCase signatures.
+			// Functions designated for use in TSL blocks have a TSL suffix.
+			// Functions created with setLayout have their first letter capitalized.
+			// Functions without these distinguishers are CPU functions
+			// Examples:
+			// CPU Function -> const fooFunc = (x) => return x;
+			// TSL Function -> const fooFuncTSL = (x) => return x;
+			// WGSL/GLSL Function -> const FooFunc = Fn( ( [ x ] ) => {
+			// 		return x;
+			// }).setLayout({
+			// 		name: 'FooFunc',
+			//		type: 'float',
+			//		inputs: [{name: 'x', type: 'float'}]
+			// })
 
 			// Dimension utility functions
 			const getSimGridDimensions = ( h ) => {
@@ -88,18 +98,33 @@
 			// Indexing utility functions
 
 			// Convert a 1 dimensional cell index on the simulation grid to a 1 dimensional cell index on the buffer grid
-			const getBufferCellIndexFromSimIndexTSL = ( simColsNode, bufferColsNode ) => {
+			const GetBufferCellIndexFromSimIndex = Fn( ( [
+				// Copy of instanceIndex
+				idx,
+				// The dimensions of the simulation grid
+				simCols,
+				// The dimensions of the buffer grid
+				bufferCols
+			] ) => {
 
 				// 2D index of sim grid cell (x, y)
-				const simGridCol = temp( instanceIndex.remainder( simColsNode ), 'simGridX' );
-				const simGridRow = temp( instanceIndex.div( simColsNode ), 'simGridY' );
+				const simGridCol = idx.remainder( simCols ).toVar( 'simGridX' );
+				const simGridRow = idx.div( simCols ).toVar( 'simGridY' );
 				// 2D index of sim grid cell in buffered grid (x, y)
-				const bufferGridCol = temp( simGridCol.add( 1 ), 'bufferGridX' );
-				const bufferGridRow = temp( simGridRow.add( 1 ), 'bufferGridY' );
+				const bufferGridCol = simGridCol.add( 1 ).toVar( 'bufferGridX' );
+				const bufferGridRow = simGridRow.add( 1 ).toVar( 'bufferGridY' );
 				// Convert to 1D index into buffered grid for storage buffer access
-				return temp( bufferGridCol.add( bufferGridRow.mul( bufferColsNode ) ), 'cellIndex' );
-
-			};
+				return bufferGridCol.add( bufferGridRow.mul( bufferCols ) ).toVar( 'cellIndex' );
+			
+			} ).setLayout( {
+				name: 'GetBufferCellIndexFromSimIndex',
+				type: 'uint',
+				inputs: [
+					{ name: 'idx', type: 'uint' },
+					{ name: 'simCols', type: 'uint' },
+					{ name: 'bufferCols', type: 'uint' }
+				]
+			} );
 
 			const getBufferCellIndexFromSimIndex = ( index, simCols, bufferCols ) => {
 
@@ -111,25 +136,40 @@
 
 			};
 
-			const getOffsetCellIndexTSL = ( dispatchesX, offsetX, offsetY ) => {
+			const GetOffsetCellIndex = Fn( ( [
+				idx,
+				dispatchesX,
+				offsetX,
+				offsetY
+			] ) => {
 
 				// Work in the coordinates of our non-adjacent cells compressed together into a separate grid
 				// In a 2d compute execution context, these are analagous with the x and y ids of our threads
-				const compactGridCol = temp( instanceIndex.remainder( dispatchesX ), 'compactGridX' );
-				const compactGridRow = temp( instanceIndex.div( dispatchesX ), 'compactGridY' );
+				const compactGridCol = idx.modInt( dispatchesX ).toVar( 'compactGridX' );
+				const compactGridRow = idx.div( dispatchesX ).toVar( 'compactGridY' );
 
 				// Get location of compact grid cell in sim grid cell space
 				const simGridCol = compactGridCol.mul( 2 ).add( offsetX );
 				const simGridRow = compactGridRow.mul( 2 ).add( offsetY );
 
 				// Get index of sim grid cell in buffer grid (x, y)
-				const bufferGridCol = temp( simGridCol.add( 1 ), 'bufferGridX' );
-				const bufferGridRow = temp( simGridRow.add( 1 ), 'bufferGridY' );
+				const bufferGridCol = simGridCol.add( 1 ).toVar( 'bufferGridX' );
+				const bufferGridRow = simGridRow.add( 1 ).toVar( 'bufferGridY' );
 
 				// Convert to 1D index into buffered grid for storage buffer access
-				return temp( bufferGridCol.add( bufferGridRow.mul( uBufferCols ) ), 'cellIndex' );
+				return bufferGridCol.add( bufferGridRow.mul( uBufferCols ) ).toVar( 'cellIndex' );
 
-			};
+
+			} ).setLayout( {
+				name: 'GetOffsetCellIndex',
+				type: 'uint',
+				inputs: [
+					{ name: 'idx', type: 'uint' },
+					{ name: 'dispatchesX', type: 'uint' },
+					{ name: 'offsetX', type: 'uint' },
+					{ name: 'offsetY', type: 'uint' }
+				]
+			} );
 
 			const getIndexedValuesFromStorageTSL = ( readBuffer, indices ) => {
 
@@ -166,18 +206,19 @@
 
 			const correctCellDivergenceTSL = ( velXNode, velYNode, scalarNode, pressureNode, cellIndexNode ) => {
 
-				const lIndex = temp( cellIndexNode.sub( 1 ), 'cellLeftIndex' );
-				const rIndex = temp( cellIndexNode.add( 1 ), 'cellRightIndex' );
-				const uIndex = temp( cellIndexNode.add( uBufferCols ), 'cellAboveIndex' );
-				const dIndex = temp( cellIndexNode.sub( uBufferCols ), 'cellBelowIndex' );
+				const lIndex = cellIndexNode.sub( 1 ).toVar( 'cellLeftIndex' );
+				const rIndex = cellIndexNode.add( 1 ).toVar( 'cellRightIndex' );
+				// cell above, cell below
+				const uIndex = cellIndexNode.add( uBufferCols ).toVar( 'cellAboveIndex' );
+				const dIndex = cellIndexNode.sub( uBufferCols ).toVar( 'cellBelowIndex' );
 				const [ lScalar, rScalar, uScalar, dScalar ] = getIndexedValuesFromStorageTSL( scalarNode, [ lIndex, rIndex, uIndex, dIndex ]	 );
-				const cellScalar = temp( lScalar.add( rScalar ).add( uScalar ).add( dScalar ), 'cellScalar' );
+				const cellScalar = lScalar.add( rScalar ).add( uScalar ).add( dScalar ).toVar( 'cellScalar' );
 
 				If( cellScalar.equal( 0.0 ), () => {
 
 					Return();
 			
-	}	);
+				}	);
 
 				const outflow = calculateCellOutflowTSL( velXNode, velYNode, cellIndexNode, rIndex, uIndex );
 				const negativeOutflow = negate( outflow );
@@ -201,6 +242,7 @@
 				const dispatchX = Math.floor( ( numCols + 1 - offsetX ) / 2 );
 				const dispatchY = Math.floor( ( numRows + 1 - offsetY ) / 2 );
 				return { dispatchX, dispatchY };
+			
 			};
 
 			const createProjectionComputeShaders = ( velXAttrib, velYAttrib, pressureAttrib, scalarAttrib, sceneInfo ) => {
@@ -216,9 +258,9 @@
 					const { dispatchX, dispatchY } = calculateDivergenceStepDispatches( sceneInfo.simCols, sceneInfo.simRows, offsetX, offsetY );
 					const dispatches = dispatchX * dispatchY;
 
-					return tslFn( () => {
+					return Fn( () => {
 
-						const cellIndex = getOffsetCellIndexTSL( dispatchX, offsetX, offsetY );
+						const cellIndex = GetOffsetCellIndex( instanceIndex, uint( dispatchX ), uint( offsetX ), uint( offsetY ) );
 						correctCellDivergenceTSL( velXStorage, velYStorage, scalarStorage, pressureStorage, cellIndex );
 
 					} )().compute( dispatches );
@@ -307,45 +349,74 @@
 				return val;
 
 			};
+			
+			const RotateUV = Fn( ( [ point, angle ] ) => {
 
-			// Fragment shader utility functions
-			const rotateUVTSL = ( pointNode, angleNode ) => {
-
-				const cosAngle = cos( angleNode );
-				const sinAngle = sin( angleNode );
-				const rotateX = cosAngle.mul( pointNode.x ).add( sinAngle.mul( pointNode.y ) );
-				const rotateY = negate( sinAngle ).mul( pointNode.x ).add( cosAngle.mul( pointNode.y ) );
+				const cosAngle = cos( angle );
+				const sinAngle = sin( angle );
+				const rotateX = cosAngle.mul( point.x ).add( sinAngle.mul( point.y ) );
+				const rotateY = negate( sinAngle ).mul( point.x ).add( cosAngle.mul( point.y ) );
 				return vec2( rotateX, rotateY );
 
-			};
+			} ).setLayout( {
+				name: 'rotateUV',
+				type: 'vec2',
+				inputs: [
+					{ name: 'point', type: 'vec2' },
+					{ name: 'angle', type: 'float' }
+				]
 
-			const getBorderTSL = ( uvNode, widthNode ) => {
+			} );
 
-				const bl = step( vec2( widthNode ), uvNode );
-				const tr = step( vec2( widthNode ), negate( uvNode ).add( 1.0 ) );
+			const GetBorder = Fn( ( [ p, width ] ) => {
+
+				const w = vec2( width, width );
+				const bl = step( w, p );
+				const tr = step( w, negate( p ).add( 1.0 ) );
 				const isBorder = abs( bl.x.mul( bl.y ).mul( tr.x ).mul( tr.y ).sub( 1.0 ) );
 				return vec3( isBorder.mul( 0.0 ), isBorder.mul( 0.25 ), isBorder.mul( 1.0 ) );
 
-			};
+			} ).setLayout( {
+				name: 'GetBorder',
+				type: 'vec3',
+				inputs: [
+					{ name: 'p', type: 'vec2' },
+					{ name: 'width', type: 'float' }
+				]
+			} );
 
-			const sdfCircleTSL = ( pointNode, radiusNode ) => {
+			const SDFCircle = Fn( ( [ p, r ] ) => {
 
-				return length( pointNode ).sub( radiusNode );
+				return length( p ).sub( r );
 
-			};
+			} ).setLayout( {
+				name: 'SDFCircle',
+				type: 'float',
+				inputs: [
+					{ name: 'p', type: 'vec2' },
+					{ name: 'r', type: 'float' }
+				]
+			} );
 
-			const sdfBoxTSL = ( uvNode, dimensionsNode ) => {
+			const SDFBox = Fn( ( [ p, dims ] ) => {
 
-				const d = abs( uvNode ).sub( dimensionsNode );
+				const d = abs( p ).sub( dims );
 				return length( max( d, float( 0.0 ) ) ).add( min( max( d.x, d.y ), 0.0 ) );
 
-			};
+			} ).setLayout( {
+				name: 'SDFBox',
+				type: 'float',
+				inputs: [
+					{ name: 'p', type: 'vec2' },
+					{ name: 'dims', type: 'vec2' }
+				]
+			} );
+			
 
-			const sdfEquilateralTriangleTSL = ( uvNode, radiusNode, offsetNode ) => {
+			const SDFEquilateralTriangle = Fn( ( [ position, r, offset ] ) => {
 
-				const p = uvNode;
-				p.addAssign( offsetNode );
-				const r = radiusNode;
+				const p = position.toVar();
+				p.addAssign( offset );
 				const k = sqrt( 3.0 );
 				p.x.assign( abs( p.x ).sub( r ) );
 				p.y.assign( p.y.add( r.div( k ) ) );
@@ -361,9 +432,17 @@
 				p.x.subAssign( clamp( p.x, r.mul( - 2.0 ), 0.0 ) );
 				return negate( length( p ).mul( sign( p.y ) ) );
 
-			};
+			} ).setLayout( {
+				name: 'SDFEquilateralTriangle',
+				type: 'float',
+				inputs: [
+					{ name: 'uvNode', type: 'vec2' },
+					{ name: 'radiusNode', type: 'float' },
+					{ name: 'offsetNode', type: 'vec2' }
+				]
+			} );
 
-			const createColorOutputTSL = ( r, g, b ) => tslFn( () => {
+			const createColorOutputTSL = ( r, g, b ) => Fn( () => {
 
 				return vec3( r, g, b );
 
@@ -437,7 +516,7 @@
 
 				} );
 			
-				const createBufferAttribute = () => new StorageBufferAttribute( infoDivergencePlayground.numBufferCells, 1 );
+				const createBufferAttribute = () => new THREE.StorageBufferAttribute( infoDivergencePlayground.numBufferCells, 1 );
 
 				// Create buffers for compute calculations
 				const velXBufferAttribute = createBufferAttribute();
@@ -445,7 +524,7 @@
 				const pressureBufferAttribute = createBufferAttribute();
 				const scalarBufferAttribute = createBufferAttribute();
 
-				const correctSingleCellDivergence = tslFn( () => {
+				const correctSingleCellDivergence = Fn( () => {
 
 					const velXReadWrite = storage( velXBufferAttribute, 'float', infoDivergencePlayground.numBufferCells );
 					const velYReadWrite = storage( velYBufferAttribute, 'float', infoDivergencePlayground.numBufferCells );
@@ -510,27 +589,19 @@
 				const white = vec4( 1.0, 1.0, 1.0, 1.0 );
 				const green = vec4( 0.0, 1.0, 0.0, 1.0 );
 				const black = vec4( 0.0, 0.0, 0.0, 1.0 );
-
-				const testFragment = tslFn( () => {
-
-					const velXRead = storageReadOnly( velXBufferAttribute, 'float', infoDivergencePlayground.numBufferCells );
-					const velYRead = storageReadOnly( velYBufferAttribute, 'float', infoDivergencePlayground.numBufferCells );
 			
-			
-				} );
-			
-				const divergenceFragmentNode = tslFn( () => {
+				const divergenceFragmentNode = Fn( () => {
 
-					const velXRead = storageReadOnly( velXBufferAttribute, 'float', infoDivergencePlayground.numBufferCells );
-					const velYRead = storageReadOnly( velYBufferAttribute, 'float', infoDivergencePlayground.numBufferCells );
+					const velXRead = storage( velXBufferAttribute, 'float', infoDivergencePlayground.numBufferCells ).toReadOnly();
+					const velYRead = storage( velYBufferAttribute, 'float', infoDivergencePlayground.numBufferCells ).toReadOnly();
 
-					const uvGrid = temp( uv().mul( vec2( uSimCols, uSimRows ) ), 'uvGrid' );
+					const uvGrid = uv().mul( vec2( uSimCols, uSimRows ) ).toVar( 'uvGridNode' );
 					// 2D Coordinate in Simulation Grid
-					const simGrid2DIndex = temp( floor( uvGrid ), 'simGrid2DIndex' );
+					const simGrid2DIndex = floor( uvGrid ).toVar( 'simGrid2DIndex' );
 					// 2D Coordinate in Buffer Grid
-					const bufferGrid2DIndex = temp( simGrid2DIndex.add( 1 ), 'bufferGrid2DIndex' );
+					const bufferGrid2DIndex = simGrid2DIndex.add( 1 ).toVar( 'bufferGrid2DIndex' );
 					// 1D Coordinate in Buffer Grid
-					const cellIndex = temp( bufferGrid2DIndex.x.add( bufferGrid2DIndex.y.mul( bufferCols ) ), 'cellIndex' );
+					const cellIndex = bufferGrid2DIndex.x.add( bufferGrid2DIndex.y.mul( bufferCols ) ).toVar( 'cellIndex' );
 
 					// Note: Calculate divergence value with actual value from buffers
 					// Negate velX and velY to move cell and rotate arrow in proper direction (+x goes right +y goes up)
@@ -539,42 +610,40 @@
 					// Since velocities are constantly changing, we need to reed them from the velocity storage buffers
 					const outflow = calculateCellOutflowTSL( velXRead, velYRead, cellIndex, cellIndex.add( 1 ), cellIndex.add( uBufferCols ) );
 
-					const samplePoint = temp(
-						vec2(
-							fract( uvGrid.x.add( timerLocal().mul( negate( velX ) ) ) ),
-							fract( uvGrid.y.add( timerLocal().mul( negate( velY ) ) ) )
-						),
-						'samplePoint'
-					);
+					const samplePoint = vec2(
+						fract( uvGrid.x.add( time.mul( negate( velX ) ) ) ),
+						fract( uvGrid.y.add( time.mul( negate( velY ) ) ) )
+					).toVar( 'samplePoint' );
+
 
 					// Get 0 to 1 uv coordinates of each cell
 					const uvCell = fract( uvGrid );
 					// Get -1 to 1 uv coordinates of each cell
 					const uvCellNDC = uvCell.mul( 2.0 ).sub( 1.0 );
 					// Add angle in radians between x-axis and velocity vector
-					const angle = atan2( negate( velY ), negate( velX ) );
+					const angle = atan( negate( velY ), negate( velX ) );
 					// Set base rotation to allign with x axis
 					angle.subAssign( radians( - 90.0 ) );
 					// Rotate uv coordinates by angle determined by velocity.
-					const uvCellNDCRotated = rotateUVTSL( uvCellNDC, angle );
+					const uvCellNDCRotated = rotate( uvCellNDC, angle );
 					// For some reason uvCellNDCRotated only works for box when it's written inline
-					const boxSDF = sdfBoxTSL( rotateUVTSL( uvCell.mul( 2.0 ).sub( 1.0 ), angle ), vec2( 0.05, 0.6 ) );
-					const triangleSDF = sdfEquilateralTriangleTSL( uvCellNDCRotated, float( 0.2 ), vec2( 0.0, - 0.5 ) );
+					const boxSDF = SDFBox( rotate( uvCell.mul( 2.0 ).sub( 1.0 ), angle ), vec2( 0.05, 0.6 ) );
+					const triangleSDF = SDFEquilateralTriangle( uvCellNDCRotated, float( 0.2 ), vec2( 0.0, - 0.5 ) );
 					// Combine box and triangle into arrow
 					const arrowSDF = min( boxSDF, triangleSDF );
-					const arrowCheck = temp( arrowSDF.lessThan( 0.0 ), 'check' );
+					const arrowCheck = arrowSDF.lessThan( 0.0 ).toVar( 'check' );
 
 					// Apply circle SDF with radius defined by the outflow
 					// Put outflow in range of -1 to 1. The maximum outflow is maxVelocityX + maxVelocityY. The minimumn outflow is the inverse of the maximumn (i.e everything flowing in or everything flowing out)
-					const normalizedOutflow = temp( outflow.div( maximumVelocity * 2 ), 'normalizedOutflow' );
+					const normalizedOutflow = outflow.div( maximumVelocity * 2 ).toVar( 'normalizedOutflow' );
 					const circleRadius = float( outflowIndicatorMaxRadius ).mul( abs( normalizedOutflow ) );
 
-					const circleSDF = temp( min( sdfCircleTSL( uvCellNDC, circleRadius ), 0.01 ), 'circleSDF' );
-					const circleCheck = temp( circleSDF.lessThan( 0.0 ), 'circleCheck' );
-					const textureColor = temp( texture( waterTexture, samplePoint ), 'textureColor' );
+					const circleSDF = min( SDFCircle( uvCellNDC, circleRadius ), 0.01 ).toVar( 'circleSDF' );
+					const circleCheck = circleSDF.lessThan( 0.0 ).toVar( 'circleCheck' );
+					const textureColor = texture( waterTexture, samplePoint ).toVar( 'textureColor' );
 
 					// When outflow is positive, show green, else show black.
-					const circleColor = temp( normalizedOutflow.lessThan( 0.0 ).cond( black, green ), 'circleColor' );
+					const circleColor = normalizedOutflow.lessThan( 0.0 ).select( black, green ).toVar( 'circleColor' );
 
 					// Apply outflow indicator to color (green for outflow/production, black for inflow/destruction)
 					textureColor.x.assign( mix( textureColor.x, circleColor.x, circleCheck ) );
@@ -585,15 +654,15 @@
 					textureColor.addAssign( white.mul( arrowCheck ) );
 
 					// Apply Border on highlight
-					const isCellHighlighted = temp( cellIndex.equal( uSelectSimCell ), 'isCellHighlighted' );
-					const borderColor = getBorderTSL( uvCell, 0.03 ).mul( isCellHighlighted );
+					const isCellHighlighted = cellIndex.equal( uSelectSimCell ).toVar( 'isCellHighlighted' );
+					const borderColor = GetBorder( uvCell, 0.03 ).mul( isCellHighlighted );
 					const finalColor = mix( textureColor.rgb, borderColor, max( borderColor.r, max( borderColor.g, borderColor.b ) ) );
 			
 					return finalColor;
 			
 	} );
 
-				const nodeMaterial = new MeshBasicNodeMaterial();
+				const nodeMaterial = new THREE.MeshBasicNodeMaterial();
 				nodeMaterial.colorNode = divergenceFragmentNode();
 				const mesh = new THREE.Mesh( geometry, nodeMaterial );
 
@@ -621,13 +690,13 @@
 				};
 
 				// Create buffers and uniforms specific to wind tunnel simulation
-				const velXBufferAttribute = new StorageBufferAttribute( infoWindTunnel.numBufferCells, 1 );
+				const velXBufferAttribute = new THREE.StorageBufferAttribute( infoWindTunnel.numBufferCells, 1 );
 				const velXStorage = storage( velXBufferAttribute, 'float', infoWindTunnel.numBufferCells );
-				const velYBufferAttribute = new StorageBufferAttribute( infoWindTunnel.numBufferCells, 1 );
+				const velYBufferAttribute = new THREE.StorageBufferAttribute( infoWindTunnel.numBufferCells, 1 );
 				const velYStorage = storage( velYBufferAttribute, 'float', infoWindTunnel.numBufferCells );
-				const pressureBufferAttribute = new StorageBufferAttribute( infoWindTunnel.numBufferCells, 1 );
+				const pressureBufferAttribute = new THREE.StorageBufferAttribute( infoWindTunnel.numBufferCells, 1 );
 				const pressureStorage = storage( pressureBufferAttribute, 'float', infoWindTunnel.numBufferCells );
-				const scalarBufferAttribute = new StorageBufferAttribute( infoWindTunnel.numBufferCells, 1 );
+				const scalarBufferAttribute = new THREE.StorageBufferAttribute( infoWindTunnel.numBufferCells, 1 );
 				const scalarStorage = storage( scalarBufferAttribute, 'uint', infoWindTunnel.numBufferCells );
 
 				const uOverRelaxation = uniform( 1.9 );
@@ -635,11 +704,11 @@
 				const uDensity = uniform( 1000 );
 				const uGravity = uniform( - 9.81 );
 
-				infoWindTunnel.computeIntegration = tslFn( () => {
+				infoWindTunnel.computeIntegration = Fn( () => {
 
 					const velYWriteBuffer = storage( velYBufferAttribute, 'float', infoWindTunnel.numBufferCells );
-					const cellIndex = getBufferCellIndexFromSimIndexTSL( uSimCols, uBufferCols );
-					velYWriteBuffer.element( cellIndex ).addAssign( gravityUniform.mul( deltaTimeUniform ) );
+					const cellIndex = GetBufferCellIndexFromSimIndex( instanceIndex, uSimCols, uBufferCols );
+					velYWriteBuffer.element( cellIndex ).addAssign( uGravity.mul( time ) );
 
 				} )().compute( infoWindTunnel.numSimCells );
 
@@ -648,7 +717,7 @@
 				// Extrapolate velocity of buffer cells from surrounding simulation cells.
 				// Effectively a post-processing part of the divergence/outflow/incompressibility step.
 				// Shader is a bit of hack, making use of the fact that our grid dimensions are always square.
-				infoWindTunnel.computeExtrapolateX = tslFn( () => {
+				infoWindTunnel.computeExtrapolateX = Fn( () => {
 
 					const velXReadWrite = storage( velXBufferAttribute, 'float', 1 );
 
@@ -666,7 +735,7 @@
 
 				} )().compute( bufferRows );
 
-				infoWindTunnel.computeExtrapolateY = tslFn( () => {
+				infoWindTunnel.computeExtrapolateY = Fn( () => {
 
 					const velYReadWrite = storage( velYBufferAttribute, 'float', 1 );
 
@@ -686,11 +755,11 @@
 
 
 				// Advect u
-				infoWindTunnel.computeAdvectFluidX = tslFn( () => {
+				infoWindTunnel.computeAdvectFluidX = Fn( () => {
 			
 					const scalarStorage = storage( scalarBufferAttribute, 'uint', infoWindTunnel.numBufferCells );
 
-					const cellIndex = getBufferCellIndexFromSimIndexTSL( uSimCols + 1, uBufferCols );
+					const cellIndex = GetBufferCellIndexFromSimIndex( uSimCols + 1, uBufferCols );
 
 					const scalarCell = scalarStorage.element( cellIndex );
 					const scalarCellLeft = scalarStorage.element( cellIndex.sub( 1 ) );
@@ -720,11 +789,11 @@
 
 				infoWindTunnel.computeAdvectFluidY;
 
-				infoWindTunnel.computeAdvectSmoke = tslFn( () => {
+				infoWindTunnel.computeAdvectSmoke = Fn( () => {
 
 					const velXStorage = storage( velXBufferAttribute, 'float', 1 );
 					const velYStorage = storage( velYBufferAttribute, 'float', 1 );
-					const cellIndex = getBufferCellIndexFromSimIndexTSL( uSimCols, uBufferCols );
+					const cellIndex = GetBufferCellIndexFromSimIndex( uSimCols, uBufferCols );
 
 					const velX = velXStorage.element( cellIndex );
 					const velXRight = velXStorage.element( cellIndex.add( 1 ) );
@@ -748,7 +817,7 @@
 
 				const geometry = new THREE.PlaneGeometry( 2, 2 );
 
-				const simWithStorageQuad = new THREE.Mesh( geometry, new MeshBasicNodeMaterial( {
+				const simWithStorageQuad = new THREE.Mesh( geometry, new THREE.MeshBasicNodeMaterial( {
 					colorNode: fs(),
 				} ) );
 				sceneWindTunnel.add( simWithStorageQuad );
@@ -756,17 +825,9 @@
 			};
 
 			function init() {
-
-				if ( WebGPU.isAvailable() === false ) {
-
-					document.body.appendChild( WebGPU.getErrorMessage() );
-
-					throw new Error( 'No WebGPU support' );
-
-				}
 			
 				// Create renderer
-				renderer = new WebGPURenderer( { antialias: true, canvas: canvas } );
+				renderer = new THREE.WebGPURenderer( { antialias: true, canvas: canvas } );
 				renderer.setPixelRatio( window.devicePixelRatio );
 				renderer.setSize( window.innerWidth, window.innerHeight );
 				document.body.appendChild( renderer.domElement );
