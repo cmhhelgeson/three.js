@@ -442,6 +442,30 @@
 				]
 			} );
 
+			const SDFArrow = Fn( ( [ p, velX, velY ] ) => {
+
+				// Add angle in radians between x-axis and velocity vector
+				const angle = atan( negate( velY ), negate( velX ) );
+				// Set base rotation to allign with x axis
+				angle.subAssign( radians( - 90.0 ) );
+				// Rotate uv coordinates by angle determined by velocity.
+				const uvCellNDCRotated = rotate( p, angle );
+				// For some reason uvCellNDCRotated only works for box when it's written inline
+				const boxSDF = SDFBox( rotate( p, angle ), vec2( 0.05, 0.6 ) );
+				const triangleSDF = SDFEquilateralTriangle( uvCellNDCRotated, float( 0.2 ), vec2( 0.0, - 0.5 ) );
+				// Combine box and triangle into arrow
+				return min( boxSDF, triangleSDF );
+
+			} ).setLayout( {
+				name: 'SDFArrow',
+				type: 'float',
+				inputs: [
+					{ name: 'p', type: 'vec2' },
+					{ name: 'velX', type: 'float' },
+					{ name: 'velY', type: 'float' }
+				]
+			} );
+
 			const createColorOutputTSL = ( r, g, b ) => Fn( () => {
 
 				return vec3( r, g, b );
@@ -620,18 +644,8 @@
 					const uvCell = fract( uvGrid );
 					// Get -1 to 1 uv coordinates of each cell
 					const uvCellNDC = uvCell.mul( 2.0 ).sub( 1.0 );
-					// Add angle in radians between x-axis and velocity vector
-					const angle = atan( negate( velY ), negate( velX ) );
-					// Set base rotation to allign with x axis
-					angle.subAssign( radians( - 90.0 ) );
-					// Rotate uv coordinates by angle determined by velocity.
-					const uvCellNDCRotated = rotate( uvCellNDC, angle );
-					// For some reason uvCellNDCRotated only works for box when it's written inline
-					const boxSDF = SDFBox( rotate( uvCell.mul( 2.0 ).sub( 1.0 ), angle ), vec2( 0.05, 0.6 ) );
-					const triangleSDF = SDFEquilateralTriangle( uvCellNDCRotated, float( 0.2 ), vec2( 0.0, - 0.5 ) );
-					// Combine box and triangle into arrow
-					const arrowSDF = min( boxSDF, triangleSDF );
-					const arrowCheck = arrowSDF.lessThan( 0.0 ).toVar( 'check' );
+
+					const arrowSDF = SDFArrow( uvCellNDC, velX, velY );
 
 					// Apply circle SDF with radius defined by the outflow
 					// Put outflow in range of -1 to 1. The maximum outflow is maxVelocityX + maxVelocityY. The minimumn outflow is the inverse of the maximumn (i.e everything flowing in or everything flowing out)
@@ -650,8 +664,7 @@
 					textureColor.y.assign( mix( textureColor.y, circleColor.y, circleCheck ) );
 					textureColor.z.assign( mix( textureColor.z, circleColor.z, circleCheck ) );
 
-					// Apply Arrow SDF to color
-					textureColor.addAssign( white.mul( arrowCheck ) );
+					textureColor.assign( mix( white, textureColor, smoothstep( 0.0, 0.02, arrowSDF ) ) );
 
 					// Apply Border on highlight
 					const isCellHighlighted = cellIndex.equal( uSelectSimCell ).toVar( 'isCellHighlighted' );
@@ -660,7 +673,7 @@
 			
 					return finalColor;
 			
-	} );
+				} );
 
 				const nodeMaterial = new THREE.MeshBasicNodeMaterial();
 				nodeMaterial.colorNode = divergenceFragmentNode();
