@@ -36,7 +36,7 @@
 
 			// Define objects shared across scenes
 			// Same orthographic camera and WebGPU renderer used across both scenes.
-			let camera, renderer, mouse, currentScene, currentSceneIndex, infoCurrentScene, settings;
+			let camera, renderer, currentScene, currentSceneIndex, infoCurrentScene, settings;
 
 			// Settings
 			const perSceneObjects = {
@@ -214,12 +214,11 @@
 			const SDFArrow = Fn( ( [ p, velX, velY ] ) => {
 
 				// Add angle in radians between x-axis and velocity vector
-				const angle = atan( negate( velY ), negate( velX ) );
+				const angle = atan( negate( velY ), velX );
 				// Set base rotation to allign with x axis
 				angle.subAssign( radians( - 90.0 ) );
 				// Rotate uv coordinates by angle determined by velocity.
 				const uvCellNDCRotated = rotate( p, angle );
-				// For some reason uvCellNDCRotated only works for box when it's written inline
 				const boxSDF = SDFBox( rotate( p, angle ), vec2( 0.05, 0.6 ) );
 				const triangleSDF = SDFEquilateralTriangle( uvCellNDCRotated, float( 0.2 ), vec2( 0.0, - 0.5 ) );
 				// Combine box and triangle into arrow
@@ -481,6 +480,8 @@
 
 			const sampleFieldTSL = ( fieldEnumNode, fieldToReadNode ) => {
 
+				const { currentBufferCols, currentBufferRows } = effectController;
+
 				const x = max( min( x, currentBufferCols.mul( h ) ), h );
 				const y = max( min( y, currentBufferRows.mul( h ) ), h );
 
@@ -642,7 +643,7 @@
 				} )().compute( divergencePlaygroundInfo.numSimCells );
 
 
-				// Pseudo-Random (not really since hash is static)
+				// Alternate vertical velocity in each cell
 				divergencePlaygroundInfo.initShaders[ 'Alternate Vertical' ] = Fn( () => {
 
 					const { currentSimCols, currentBufferCols } = effectController;
@@ -656,13 +657,13 @@
 			
 				} )().compute( divergencePlaygroundInfo.numSimCells );
 
-
+				// Alternate horizontal velocity in each cell
 				divergencePlaygroundInfo.initShaders[ 'Alternate Horizontal' ] = Fn( () => {
 
 					const { currentSimCols, currentBufferCols } = effectController;
 
 					const cellIndex = GetBufferCellIndexFromSimIndex( instanceIndex, currentSimCols, currentBufferCols );
-					const isUp = cellIndex.remainder( 2 );
+					const isUp = instanceIndex.remainder( 2 );
 					velXStorage.element( cellIndex ).assign( isUp.equal( 0 ).select( 4, - 4 ) );
 					velYStorage.element( cellIndex ).assign( 0 );
 
@@ -681,6 +682,21 @@
 					scalarStorage.element( cellIndex ).assign( 1 );
 			
 				} )().compute( divergencePlaygroundInfo.numSimCells );
+
+				divergencePlaygroundInfo[ 'Converge Horizontal' ] = Fn( () => {
+
+					const { currentSimCols, currentBufferCols } = effectController;
+
+					const halfSize = currentSimCols.div( 2 );
+
+					const isLeftSide = floor( instanceIndex.div( halfSize ) );
+
+					const cellIndex = GetBufferCellIndexFromSimIndex( instanceIndex, currentSimCols, currentBufferCols );
+					velXStorage.element( cellIndex ).assign( isLeftSide.select( 4, - 4 ) );
+					velYStorage.element( cellIndex ).assign( 0 );
+					scalarStorage.element( cellIndex ).assign( 1 );
+			
+				} )();
 
 				const initialFlowMap = divergencePlaygroundInfo[ 'Flow Map' ];
 
@@ -998,7 +1014,7 @@
 
 			function animate() {
 
-				// Apply external forces ( gravity, outside actors, etc. ) to velocity
+				// Apply external forces ( gravity, outside actors, user chicanery) to velocity
 				if ( infoCurrentScene.computeIntegration ) {
 
 					renderer.compute( infoCurrentScene.computeIntegration );
@@ -1006,6 +1022,8 @@
 				}
 
 				// Compute divergence of each cell and project surrounding velocities
+				// Divergence is computed on user input in the divergence playground,
+				// not synchronously with the render input.
 				if ( infoCurrentScene.computeProjection && currentSceneIndex !== SCENE_DIVERGENCE_PLAYGROUND ) {
 
 					for ( let i = 0; i < effectController[ 'Projection Iterations' ]; i ++ ) {
