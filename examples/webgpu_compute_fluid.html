@@ -30,7 +30,7 @@
 
 			import * as THREE from 'three';
 			// In TSL, unless directly operating on a node, nearly every function you deploy needs to be imported from Nodes.js
-			import { vec2, vec3, vec4, rotate, hash, instancedArray, sqrt, attributeArray, sign, mix, uint, Fn, time, smoothstep, step, radians, atan, cos, sin, clamp, length, abs, min, max, float, timerDelta, cond, positionGeometry, varying, varyingProperty, floor, uv, If, temp, negate, storage, wgslFn, code, instanceIndex, uniform, Return, texture, fract, not } from 'three/tsl';
+			import { vec2, bool, vec3, vec4, rotate, hash, instancedArray, sqrt, attributeArray, sign, mix, uint, Fn, time, smoothstep, step, radians, atan, cos, sin, clamp, length, abs, min, max, float, timerDelta, cond, positionGeometry, varying, varyingProperty, floor, uv, If, temp, negate, storage, wgslFn, code, instanceIndex, uniform, Return, texture, fract, not } from 'three/tsl';
 
 			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
 
@@ -67,7 +67,7 @@
 			const effectController = {
 				// Global settings that apply across scenes
 				'Current Scene': 'Divergence Playground',
-				'Projection Iterations': 40,
+				divergenceIterations: 40,
 				currentSimCols: uniform( 0 ),
 				currentSimRows: uniform( 0 ),
 				currentBufferCols: uniform( 0 ),
@@ -85,6 +85,7 @@
 						'Alternate Horizontal': null,
 					},
 					'Flow Map': 'Alternate Vertical',
+					arrowOn: uniform( 1 ).label( 'arrowOn' ),
 				},
 				'Wind Tunnel': {
 					...structuredClone( perSceneObjects ),
@@ -257,9 +258,16 @@
 
 			};
 
-			// Indexing utility functions
+			// INDEXING UTILITIES
 
-			// Convert a 1 dimensional cell index on the simulation grid to a 1 dimensional cell index on the buffer grid
+			// Convert a 1 dimensional cell index on the simulation grid to a 1 dimensional cell index on the buffer grid.
+			//                o=Sim Coord, x=Buff Coord
+			//                    [ ][ ][ ][ ][ ]
+			//  [x][ ][x]   --->  [ ][x][ ][x][ ]
+			//  [ ][ ][ ]   --->  [o][ ][o][ ][ ]
+			//  [x][ ][x]   --->  [ ][x][ ][x][ ]
+			//                    [o][ ][o][ ][ ]
+			// Indices 0,2,6,8 -> Indices 6,8,16,18
 			const GetBufferCellIndexFromSimIndex = Fn( ( [
 				// Copy of instanceIndex
 				idx,
@@ -270,7 +278,7 @@
 			] ) => {
 
 				// 2D index of sim grid cell (x, y)
-				const simGridCol = idx.remainder( simCols ).toVar( 'simGridX' );
+				const simGridCol = idx.modInt( simCols ).toVar( 'simGridX' );
 				const simGridRow = idx.div( simCols ).toVar( 'simGridY' );
 				// 2D index of sim grid cell in buffered grid (x, y)
 				const bufferGridCol = simGridCol.add( 1 ).toVar( 'bufferGridX' );
@@ -309,6 +317,14 @@
 
 				// Work in the coordinates of our non-adjacent cells compressed together into a separate grid
 				// In a 2d compute execution context, these are analagous with the x and y ids of our threads
+				// Convert indices of compact grid to non-adjacent simulation grid to buffer grid
+				//                                    o=Sim Coord, x=Buff Coord
+				//                                        [ ][ ][ ][ ][ ]
+				//                      [x][ ][x]   --->  [ ][x][ ][x][ ]
+				//       [x][x] ----->  [ ][ ][ ]   --->  [o][ ][o][ ][ ]
+				//       [x][x] ----->  [x][ ][x]   --->  [ ][x][ ][x][ ]
+				//                                        [o][ ][o][ ][ ]
+				// Indices: 0,1,2,3 -> Indices 0,2,6,8 -> Indices 6,8,16,18
 				const compactGridCol = idx.modInt( dispatchesX ).toVar( 'compactGridX' );
 				const compactGridRow = idx.div( dispatchesX ).toVar( 'compactGridY' );
 
@@ -322,7 +338,6 @@
 
 				// Convert to 1D index into buffered grid for storage buffer access
 				return bufferGridCol.add( bufferGridRow.mul( currentBufferCols ) ).toVar( 'cellIndex' );
-
 
 			} ).setLayout( {
 				name: 'GetOffsetCellIndex',
@@ -382,14 +397,16 @@
 
 				const { overRelaxation, currentBufferCols } = effectController;
 
+				// Buffered grid allows us to access left and right cells this way without fear of overflow into next row
 				const lIndex = cellIndexNode.sub( 1 ).toVar( 'cellLeftIndex' );
 				const rIndex = cellIndexNode.add( 1 ).toVar( 'cellRightIndex' );
-				// cell above, cell below
+				// Add number of buffer cols to index up and down a row
 				const uIndex = cellIndexNode.add( currentBufferCols ).toVar( 'cellAboveIndex' );
 				const dIndex = cellIndexNode.sub( currentBufferCols ).toVar( 'cellBelowIndex' );
 				const [ lScalar, rScalar, uScalar, dScalar ] = getIndexedValuesFromStorageTSL( scalarNode, [ lIndex, rIndex, uIndex, dIndex ]	 );
 				const cellScalar = lScalar.add( rScalar ).add( uScalar ).add( dScalar ).toVar( 'cellScalar' );
 
+				// All surrounding cells are obstacles, therefore, don't calculate this cell
 				If( cellScalar.equal( 0.0 ), () => {
 
 					Return();
@@ -413,6 +430,7 @@
 
 			};
 
+			// Calculate the number of dispatches in each of the four projection shaders
 			const calculateDivergenceStepDispatches = ( numCols, numRows, offsetX, offsetY ) => {
 
 				const dispatchX = Math.floor( ( numCols + 1 - offsetX ) / 2 );
@@ -522,28 +540,32 @@
 
 			};
 
-			const createColorOutputTSL = ( r, g, b ) => Fn( () => {
-
-				return vec3( r, g, b );
-
-			} );
-
 			// Scene setup utils
 
 			const switchScene = ( sceneIndex ) => {
 
 				currentSceneIndex = sceneIndex;
 
-				if ( sceneIndex === SCENE_DIVERGENCE_PLAYGROUND ) {
+				switch ( sceneIndex ) {
 
-					infoCurrentScene = effectController[ 'Divergence Playground' ];
-					currentScene = sceneDivergencePlayground;
+					case SCENE_DIVERGENCE_PLAYGROUND: {
 
-				} else {
+						infoCurrentScene = effectController[ 'Divergence Playground' ];
+						currentScene = sceneDivergencePlayground;
+						effectController.divergenceIterations = 1;
+						break;
 
-					infoCurrentScene = effectController[ 'Wind Tunnel' ];
-					currentScene = sceneWindTunnel;
+					}
 
+					case SCENE_WIND_TUNNEL: {
+
+						infoCurrentScene = effectController[ 'Wind Tunnel' ];
+						effectController.divergenceIterations = 80;
+						currentScene = sceneWindTunnel;
+						break;
+			
+					}
+			
 				}
 
 				// Reassign global uniforms based on current scene
@@ -561,7 +583,7 @@
 				const maximumVelocity = 4.0;
 
 				// Calculate proper cell height
-				const res = 20;
+				const res = 30;
 				const h = domainHeight / res;
 
 				// Get proper buffer grid and simulation grid dimensions
@@ -608,7 +630,16 @@
 
 				} )().compute( 1 );
 
+				const addObstacle = Fn( () => {
+
+					const cellIndex = GetBufferCellIndexFromSimIndex( uSelectSimCell );
+					scalarStorage.element( cellIndex ).assign( 0 );
+
+				} )().compute( 1 );
+
 				canvas.addEventListener( 'click', ( event ) => {
+
+					//renderer.compute( addObstacle );
 
 					for ( const projectionShader of divergencePlaygroundInfo.computeProjection ) {
 
@@ -617,7 +648,6 @@
 					}
 
 				} );
-
 
 				// Initialize all cells as obstacles at first
 				divergencePlaygroundInfo.clearScalar = createClearScalarShader( divergencePlaygroundInfo );
@@ -649,7 +679,7 @@
 					const { currentSimCols, currentBufferCols } = effectController;
 
 					const cellIndex = GetBufferCellIndexFromSimIndex( instanceIndex, currentSimCols, currentBufferCols );
-					const isUp = cellIndex.remainder( 2 );
+					const isUp = cellIndex.modInt( 2 );
 					velXStorage.element( cellIndex ).assign( 0 );
 					velYStorage.element( cellIndex ).assign( isUp.equal( 0 ).select( 4, - 4 ) );
 
@@ -663,7 +693,7 @@
 					const { currentSimCols, currentBufferCols } = effectController;
 
 					const cellIndex = GetBufferCellIndexFromSimIndex( instanceIndex, currentSimCols, currentBufferCols );
-					const isUp = instanceIndex.remainder( 2 );
+					const isUp = instanceIndex.modInt( 2 );
 					velXStorage.element( cellIndex ).assign( isUp.equal( 0 ).select( 4, - 4 ) );
 					velYStorage.element( cellIndex ).assign( 0 );
 
@@ -705,11 +735,15 @@
 				// Create Compute Shaders
 				createProjectionComputeShaders( velXStorage, velYStorage, pressureStorage, scalarStorage, effectController[ 'Divergence Playground' ] );
 				effectController[ 'Divergence Playground' ][ 'Run Divergence Step' ] = () => {
+
+					for ( let i = 0; i < effectController.divergenceIterations; i ++ ) {
 			
-					for ( const projectionShader of effectController[ 'Divergence Playground' ].computeProjection ) {
+						for ( const projectionShader of effectController[ 'Divergence Playground' ].computeProjection ) {
 
-						renderer.compute( projectionShader );
+							renderer.compute( projectionShader );
 
+						}
+			
 					}
 
 				};
@@ -736,6 +770,7 @@
 				const divergenceFragmentNode = Fn( () => {
 
 					const { currentSimCols, currentSimRows, currentBufferCols } = effectController;
+					const { arrowOn } = effectController[ 'Divergence Playground' ];
 
 					const velXRead = velXStorage;
 					const velYRead = velYStorage;
@@ -766,8 +801,6 @@
 					// Get -1 to 1 uv coordinates of each cell
 					const uvCellNDC = uvCell.mul( 2.0 ).sub( 1.0 );
 
-					const arrowSDF = SDFArrow( uvCellNDC, velX, velY );
-
 					// Apply circle SDF with radius defined by the outflow
 					// Put outflow in range of -1 to 1. The maximum outflow is maxVelocityX + maxVelocityY. The minimumn outflow is the inverse of the maximumn (i.e everything flowing in or everything flowing out)
 					const normalizedOutflow = outflow.div( maximumVelocity * 2 ).toVar( 'normalizedOutflow' );
@@ -785,7 +818,14 @@
 					textureColor.y.assign( mix( textureColor.y, circleColor.y, circleCheck ) );
 					textureColor.z.assign( mix( textureColor.z, circleColor.z, circleCheck ) );
 
-					textureColor.assign( mix( white, textureColor, smoothstep( 0.0, 0.02, arrowSDF ) ) );
+					If( arrowOn.equal( 1 ), () => {
+
+						const arrowSDF = SDFArrow( uvCellNDC, velX, velY );
+
+						textureColor.assign( mix( white, textureColor, smoothstep( 0.0, 0.02, arrowSDF ) ) );
+
+
+					} );
 
 					// Apply Border on highlight
 					const isCellHighlighted = cellIndex.equal( uSelectSimCell ).toVar( 'isCellHighlighted' );
@@ -829,7 +869,7 @@
 
 				effectController[ 'Wind Tunnel' ].computeIntegration = Fn( () => {
 
-					const { gravity, density, currentSimCols, currentBufferCols } = effectController;
+					const { gravity, denssity, currentSimCols, currentBufferCols } = effectController;
 
 					const cellIndex = GetBufferCellIndexFromSimIndex( instanceIndex, currentSimCols, currentBufferCols );
 					velYStorage.element( cellIndex ).addAssign( gravity.mul( time ) );
@@ -922,14 +962,16 @@
 
 				} )().compute( effectController[ 'Wind Tunnel' ].numSimCells );
 
-				const fs = createColorOutputTSL( 1.0, 0.0, 0.0 );
-
 				sceneWindTunnel = new THREE.Scene();
 
 				const geometry = new THREE.PlaneGeometry( 2, 2 );
 
 				const simWithStorageQuad = new THREE.Mesh( geometry, new THREE.MeshBasicNodeMaterial( {
-					colorNode: fs(),
+					colorNode: Fn( () => {
+
+						return vec3( 1.0, 0.0, 0.0 );
+			
+					} )(),
 				} ) );
 				sceneWindTunnel.add( simWithStorageQuad );
 
@@ -965,7 +1007,6 @@
 				switchScene( SCENE_DIVERGENCE_PLAYGROUND );
 
 				settings = {
-					'Projection Iterations': 40,
 					'Current Scene': 'Divergence Playground',
 				};
 
@@ -978,11 +1019,12 @@
 					switchScene( sceneEnum[ settings[ 'Current Scene' ] ] );
 			
 				} );
-				simulationFolder.add( effectController, 'Projection Iterations', 1, 100 ).step( 1 );
+				simulationFolder.add( effectController, 'divergenceIterations', 1, 100 ).step( 1 ).name( 'Divergence Iterations' );
 				simulationFolder.add( effectController.overRelaxation, 'value', 1.0, 1.9 ).step( 0.1 ).name( 'Over Relaxation' );
 
 				const divergencePlaygroundFolder = gui.addFolder( 'Divergence Playground' );
 				divergencePlaygroundFolder.add( effectController[ 'Divergence Playground' ], 'Run Divergence Step' );
+				divergencePlaygroundFolder.add( effectController[ 'Divergence Playground' ].arrowOn, 'value', [ 0, 1 ] );
 				divergencePlaygroundFolder.add(
 					effectController[ 'Divergence Playground' ],
 					'Flow Map',
@@ -1026,7 +1068,7 @@
 				// not synchronously with the render input.
 				if ( infoCurrentScene.computeProjection && currentSceneIndex !== SCENE_DIVERGENCE_PLAYGROUND ) {
 
-					for ( let i = 0; i < effectController[ 'Projection Iterations' ]; i ++ ) {
+					for ( let i = 0; i < effectController.divergenceIterations; i ++ ) {
 
 						for ( const projectionShader of infoCurrentScene.computeProjection ) {
 
