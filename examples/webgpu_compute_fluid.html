@@ -83,6 +83,8 @@
 						'Random': null,
 						'Alternate Vertical': null,
 						'Alternate Horizontal': null,
+						'Zero Velocity': null,
+						'Converge Horizontal': null,
 					},
 					'Flow Map': 'Alternate Vertical',
 					arrowOn: uniform( 1 ).label( 'arrowOn' ),
@@ -261,13 +263,13 @@
 			// INDEXING UTILITIES
 
 			// Convert a 1 dimensional cell index on the simulation grid to a 1 dimensional cell index on the buffer grid.
-			//                o=Sim Coord, x=Buff Coord
-			//                    [ ][ ][ ][ ][ ]
-			//  [x][ ][x]   --->  [ ][x][ ][x][ ]
-			//  [ ][ ][ ]   --->  [o][ ][o][ ][ ]
-			//  [x][ ][x]   --->  [ ][x][ ][x][ ]
-			//                    [o][ ][o][ ][ ]
-			// Indices 0,2,6,8 -> Indices 6,8,16,18
+			//
+			//                [ ][ ][ ][ ]
+			//  [x][x]  --->  [ ][x][x][ ]
+			//  [x][x]  --->  [ ][x][x][ ]
+			//                [ ][ ][ ][ ]
+			//
+			// Sim Grid Indices 0,1,2,3 -> Buffer Grid Indices 5, 6, 9, 10
 			const GetBufferCellIndexFromSimIndex = Fn( ( [
 				// Copy of instanceIndex
 				idx,
@@ -318,12 +320,12 @@
 				// Work in the coordinates of our non-adjacent cells compressed together into a separate grid
 				// In a 2d compute execution context, these are analagous with the x and y ids of our threads
 				// Convert indices of compact grid to non-adjacent simulation grid to buffer grid
-				//                                    o=Sim Coord, x=Buff Coord
-				//                                        [ ][ ][ ][ ][ ]
-				//                      [x][ ][x]   --->  [ ][x][ ][x][ ]
-				//       [x][x] ----->  [ ][ ][ ]   --->  [o][ ][o][ ][ ]
-				//       [x][x] ----->  [x][ ][x]   --->  [ ][x][ ][x][ ]
-				//                                        [o][ ][o][ ][ ]
+				//                                    o=Sim Coord, x=Buff Coord   Shader Invocations
+				//                                        [ ][ ][ ][ ][ ]          [x][x][x][x][x]
+				//                      [x][ ][x]   --->  [ ][x][ ][x][ ]          [x][0][1][0][x]
+				//       [x][x] ----->  [ ][ ][ ]   --->  [o][ ][o][ ][ ]          [x][2][3][2][x]
+				//       [x][x] ----->  [x][ ][x]   --->  [ ][x][ ][x][ ]          [x][0][1][0][x]
+				//                                        [o][ ][o][ ][ ]          [x][x][x][x][x]
 				// Indices: 0,1,2,3 -> Indices 0,2,6,8 -> Indices 6,8,16,18
 				const compactGridCol = idx.modInt( dispatchesX ).toVar( 'compactGridX' );
 				const compactGridRow = idx.div( dispatchesX ).toVar( 'compactGridY' );
@@ -693,7 +695,7 @@
 					const { currentSimCols, currentBufferCols } = effectController;
 
 					const cellIndex = GetBufferCellIndexFromSimIndex( instanceIndex, currentSimCols, currentBufferCols );
-					const isUp = instanceIndex.modInt( 2 );
+					const isUp = instanceIndex.modInt( currentSimCols ).modInt( 2 );
 					velXStorage.element( cellIndex ).assign( isUp.equal( 0 ).select( 4, - 4 ) );
 					velYStorage.element( cellIndex ).assign( 0 );
 
@@ -713,20 +715,20 @@
 			
 				} )().compute( divergencePlaygroundInfo.numSimCells );
 
-				divergencePlaygroundInfo[ 'Converge Horizontal' ] = Fn( () => {
+				divergencePlaygroundInfo.initShaders[ 'Converge Horizontal' ] = Fn( () => {
 
 					const { currentSimCols, currentBufferCols } = effectController;
 
 					const halfSize = currentSimCols.div( 2 );
 
-					const isLeftSide = floor( instanceIndex.div( halfSize ) );
+					const isLeftSide = instanceIndex.modInt( currentSimCols ).div( halfSize );
 
 					const cellIndex = GetBufferCellIndexFromSimIndex( instanceIndex, currentSimCols, currentBufferCols );
-					velXStorage.element( cellIndex ).assign( isLeftSide.select( 4, - 4 ) );
+					velXStorage.element( cellIndex ).assign( isLeftSide.equal( 0 ).select( 4, - 4 ) );
 					velYStorage.element( cellIndex ).assign( 0 );
 					scalarStorage.element( cellIndex ).assign( 1 );
 			
-				} )();
+				} )().compute( divergencePlaygroundInfo.numSimCells );
 
 				const initialFlowMap = divergencePlaygroundInfo[ 'Flow Map' ];
 
@@ -1028,7 +1030,7 @@
 				divergencePlaygroundFolder.add(
 					effectController[ 'Divergence Playground' ],
 					'Flow Map',
-					[ 'Random', 'Alternate Vertical', 'Alternate Horizontal', 'Zero Velocity' ]
+					[ 'Random', 'Alternate Vertical', 'Alternate Horizontal', 'Zero Velocity', 'Converge Horizontal' ]
 				).onChange( () => {
 
 					const divergencePlaygroundInfo = effectController[ 'Divergence Playground' ];
