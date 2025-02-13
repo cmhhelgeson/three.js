@@ -56,10 +56,15 @@
 				numBufferCells: 0,
 				// Compute shaders for each scene
 				clearScalars: null,
+				// Reset the pressure information
+				computeResetPressure: null,
+				// Account for external actors
 				computeIntegration: null,
+				// Projection/Divergence Step
 				computeProjection: null,
 				computeExtrapolateX: null,
 				computeExtrapolateY: null,
+				// Advection steps
 				computeAdvectFluid: null,
 				computeAdvectSmoke: null,
 			};
@@ -654,6 +659,13 @@
 				// Initialize all cells as obstacles at first
 				divergencePlaygroundInfo.clearScalar = createClearScalarShader( divergencePlaygroundInfo );
 				renderer.compute( divergencePlaygroundInfo.clearScalars );
+
+				divergencePlaygroundInfo.computeResetPressure = Fn( () => {
+
+					pressureStorage.element( instanceIndex ).assign( 0.0 );
+
+			
+				} )().compute( divergencePlaygroundInfo.numSimCells );
 			
 				// Pseudo-Random (not really since hash is static)
 				divergencePlaygroundInfo.initShaders[ 'Random' ] = Fn( () => {
@@ -1057,6 +1069,12 @@
 			}
 
 			function animate() {
+
+				if ( infoCurrentScene.computeResetPressure ) {
+
+					renderer.compute( infoCurrentScene.computeResetPressure );
+			
+				}
 
 				// Apply external forces ( gravity, outside actors, user chicanery) to velocity
 				if ( infoCurrentScene.computeIntegration ) {
