@@ -63,6 +63,7 @@
 				velYStorage: null,
 				pressureStorage: null,
 				scalarStorage: null,
+				infoBuffer: null,
 				infoStorage: null,
 				// Initial Simulation Grid Dimensions for each scene
 				simCols: 0,
@@ -445,8 +446,8 @@
 				newPressure.mulAssign( overRelaxation );
 
 				pressureStorage.element( cellIndexNode ).addAssign( newPressure );
-				atomicMin( infoStorage.element( 0 ), newPressure );
-				atomicMax( infoStorage.element( 1 ), newPressure );
+				atomicMin( infoStorage.element( 0 ), newPressure.mul( 1000 ) );
+				atomicMax( infoStorage.element( 1 ), newPressure.mul( 1000 ) );
 				// Apply scalars to cell velocities
 				// Velocity X
 				velXStorage.element( cellIndexNode ).subAssign( float( lScalar ).mul( newPressure ) );
@@ -530,8 +531,8 @@
 				const x = max( min( x, currentBufferCols.mul( h ) ), h );
 				const y = max( min( y, currentBufferRows.mul( h ) ), h );
 
-				const notUField = not( fieldNode.equal( U_FIELD ) );
-				const notVField = not( fieldNode.equal( V_FIELD ) );
+				const notUField = not( fieldEnumNode.equal( U_FIELD ) );
+				const notVField = not( fieldEnumNode.equal( V_FIELD ) );
 				const h2 = float( h ).mul( h );
 				const h1 = float( 1.0 ).div( h );
 
@@ -650,7 +651,10 @@
 				divergencePlaygroundInfo.velYStorage = instancedArray( divergencePlaygroundInfo.numBufferCells );
 				divergencePlaygroundInfo.pressureStorage = instancedArray( divergencePlaygroundInfo.numBufferCells );
 				divergencePlaygroundInfo.scalarStorage = instancedArray( divergencePlaygroundInfo.numBufferCells, 'uint' );
-				divergencePlaygroundInfo.infoStorage = instancedArray( 2, 'int' ).toAtomic().label( 'DivergencePlaygroundInfo' );
+				const infoArray = new Int32Array( 2 );
+				infoArray[ 0 ] = 100000;
+				infoArray[ 1 ] = 0;
+				divergencePlaygroundInfo.infoStorage = instancedArray( infoArray, 'int' ).toAtomic().label( 'DivergencePlaygroundInfo' );
 
 				const correctSingleCellDivergence = Fn( () => {
 
@@ -685,10 +689,8 @@
 
 				divergencePlaygroundInfo.computeResetPressure = Fn( () => {
 			
-					const { pressureStorage, infoStorage } = divergencePlaygroundInfo;
+					const { pressureStorage } = divergencePlaygroundInfo;
 					pressureStorage.element( instanceIndex ).assign( 0.0 );
-					atomicStore( infoStorage.element( 0 ), 0 );
-					atomicStore( infoStorage.element( 1 ), 0 );
 
 				} )().compute( divergencePlaygroundInfo.numSimCells );
 			
@@ -927,6 +929,14 @@
 				// Extrapolate velocity of buffer cells from surrounding simulation cells.
 				// Effectively a post-processing part of the divergence/outflow/incompressibility step.
 				// Shader is a bit of hack, making use of the fact that our grid dimensions are always square.
+
+
+				// [x]<-[ ][ ]->[x]
+				// [x]<-[o][o]->[x]
+				// [x]<-[o][o]->[x]
+				// [x]<-[ ][ ]->[x]
+				// o = sim grid cells, x = extrapolateY operation cells
+				// Arrows demonstrate how buffer cell velocity is extrapolated
 				effectController[ 'Wind Tunnel' ].computeExtrapolateX = Fn( () => {
 
 					// Buffer cell to left of first simulation column
@@ -943,6 +953,13 @@
 
 				} )().compute( bufferRows );
 
+				// [x][x][x][x]
+				//  ^  ^  ^  ^
+				// [ ][o][o][ ]
+				// [ ][o][o][ ]
+				//  l  l  l  l
+				// [x][x][x][x]
+				// o = sim grid cells, x = extrapolateY operation cells
 				effectController[ 'Wind Tunnel' ].computeExtrapolateY = Fn( () => {
 
 					// Buffer cell below first simulation row
@@ -951,16 +968,25 @@
 					const cellTopBufferIndex = instanceIndex.add( bufferCols * bufferRows - 1 );
 
 					// Apply vertical velocity of simulation cells to top and bottom buffer cells
-					const bottomBufferVelocity = velYStorage.element( cellBottomBufferIndex );
-					bottomBufferVelocity.assign( velYStorage.element( cellBottomBufferIndex.add( 1 ) ) );
+					velYStorage.element( cellBottomBufferIndex ).assign(
+						velYStorage.element( cellBottomBufferIndex.add( bufferCols ) )
+					);
 
-					const topBufferVelocity = velYStorage.element( cellTopBufferIndex );
-					topBufferVelocity.assign( velYStorage.element( cellTopBufferIndex.sub( 1 ) ) );
+					velYStorage.element( cellTopBufferIndex ).assign( velYStorage.element( cellTopBufferIndex.sub( bufferCols ) ) );
 
 				} )().compute( bufferCols );
 
 
-				// Advect u
+				// Advect Velocity X
+				// 1. Infer need to compute from scalars
+				// 2. Get average y velocity from the surrounding cells to the right since.
+				//    These cells are mostly likely to influence where the hypothetical particle
+				//    moving in the x-direction lands.
+				// 	  X = Current Cell, ^ = vertical velocity of surrounding cell
+				//    [^] [^] [^]
+				//    [^] [x] [^]  Fluid moving in the x-direction will be more influenced
+				//    [^] [^] [^]  by cells at indices 1, 2, and 5.
+				//   -------------> x-direction
 				effectController[ 'Wind Tunnel' ].computeAdvectFluidX = Fn( () => {
 
 					const { currentSimCols, currentBufferCols } = effectController;
@@ -990,7 +1016,46 @@
 
 				} )().compute( ( effectController[ 'Wind Tunnel' ].simCols + 1 ) * effectController[ 'Wind Tunnel' ].simRows );
 
-				effectController[ 'Wind Tunnel' ].computeAdvectFluidY;
+				// Advect Velocity Y
+				// 1. Infer need to compute from scalars
+				// 2. Get average x velocity from the surrounding cells to the left since.
+				//    These cells are mostly likely to influence where the hypothetical particle
+				//    moving in the y-direction lands.
+				//     X = Current Cell, > = horizontal velocity of surrounding cell
+				//	^
+				//  |  [>] [>] [>]
+				//  |  [>] [x] [>]  Fluid moving in the y-direction will be more influenced
+				//  |  [>] [>] [>]  by cells at indices 3, 6, and 7.
+				//  |
+				//  y-direction
+				effectController[ 'Wind Tunnel' ].computeAdvectFluidY = Fn( () => {
+
+					const { currentSimCols, currentBufferCols } = effectController;
+
+					const cellIndex = GetBufferCellIndexFromSimIndex( currentSimCols + 1, currentBufferCols );
+
+					const scalarCell = scalarStorage.element( cellIndex );
+					const scalarCellLeft = scalarStorage.element( cellIndex.sub( 1 ) );
+
+					// If there is nowhere for the velocity to advect frokm
+					If( scalarCell.equal( 0.0 ).or( scalarCellLeft.equal( 0.0 ) ), () => {
+
+						Return();
+
+					} );
+
+					const x = float( 1.0 );
+					const y = float( 1.0 );
+
+					const velX = velXStorage.element( cellIndex );
+					const velY = averageVelocityYTSL( velYStorage, cellIndex );
+					x.subAssign( velX.mul( timerDelta() ) );
+					y.subAssign( velY.mul( timerDelta() ) );
+
+					velY.assign( sampleFieldTSL( V_FIELD, velYStorage ) );
+
+
+				} )().compute( ( effectController[ 'Wind Tunnel' ].simCols + 1 ) * effectController[ 'Wind Tunnel' ].simRows );
 
 				effectController[ 'Wind Tunnel' ].computeAdvectSmoke = Fn( () => {
 
@@ -1163,9 +1228,12 @@
 
 				}
 
-				const info = new Int32Array( await renderer.getArrayBufferAsync( infoCurrentScene.infoStorage.value ) );
+				console.log( infoCurrentScene.infoStorage );
 
-				divElements.info_panel.innerHTML = `Min Pressure: ${info[ 0 ]} Max Pressure: ${info[ 1 ]}`;
+				const info = new Int32Array( await renderer.getArrayBufferAsync( infoCurrentScene.infoStorage.value ) );
+				console.log( info );
+
+				divElements.info_panel.innerHTML = `Min Pressure: ${info[ 0 ] / 1000} Max Pressure: ${info[ 1 ] / 1000}`;
 
 				renderer.render( currentScene, camera );
 
