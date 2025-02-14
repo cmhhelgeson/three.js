@@ -111,6 +111,7 @@
 					},
 					'Flow Map': 'Alternate Vertical',
 					arrowOn: uniform( 1 ).label( 'arrowOn' ),
+					arrowHeadRadius: uniform( 0.2 ),
 				},
 				'Wind Tunnel': {
 					...structuredClone( perSceneObjects ),
@@ -237,7 +238,7 @@
 				]
 			} );
 
-			const SDFArrow = Fn( ( [ p, velX, velY ] ) => {
+			const SDFArrow = Fn( ( [ p, velX, velY, arrowHeadRadius ] ) => {
 
 				// Add angle in radians between x-axis and velocity vector
 				const angle = atan( negate( velY ), velX );
@@ -246,7 +247,7 @@
 				// Rotate uv coordinates by angle determined by velocity.
 				const uvCellNDCRotated = rotate( p, angle );
 				const boxSDF = SDFBox( rotate( p, angle ), vec2( 0.05, 0.6 ) );
-				const triangleSDF = SDFEquilateralTriangle( uvCellNDCRotated, float( 0.2 ), vec2( 0.0, - 0.5 ) );
+				const triangleSDF = SDFEquilateralTriangle( uvCellNDCRotated, float( arrowHeadRadius ), vec2( 0.0, - 0.5 ) );
 				// Combine box and triangle into arrow
 				return min( boxSDF, triangleSDF );
 
@@ -256,7 +257,8 @@
 				inputs: [
 					{ name: 'p', type: 'vec2' },
 					{ name: 'velX', type: 'float' },
-					{ name: 'velY', type: 'float' }
+					{ name: 'velY', type: 'float' },
+					{ name: 'arrowHeadRadius', type: 'float' }
 				]
 			} );
 
@@ -815,10 +817,9 @@
 			
 				const divergenceFragmentNode = Fn( () => {
 
-					const { velXStorage, velYStorage } = divergencePlaygroundInfo;
+					const { velXStorage, velYStorage, arrowOn, arrowHeadRadius } = divergencePlaygroundInfo;
 
 					const { currentSimCols, currentSimRows, currentBufferCols } = effectController;
-					const { arrowOn } = effectController[ 'Divergence Playground' ];
 
 					const velXRead = velXStorage;
 					const velYRead = velYStorage;
@@ -866,9 +867,19 @@
 					textureColor.y.assign( mix( textureColor.y, circleColor.y, circleCheck ) );
 					textureColor.z.assign( mix( textureColor.z, circleColor.z, circleCheck ) );
 
+					const uArrowUV = uvCell.toVar( 'uArrowUV' );
+					const vArrowUV = uvCell.toVar( 'vArrowUV' );
+
+					uArrowUV.y.mulAssign( 2.0 );
+					uArrowUV.y.subAssign( 1.0 );
+
+					vArrowUV.x.mulAssign( 2.0 );
+					vArrowUV.x.subAssign( 1.0 );
+
+
 					If( arrowOn.equal( 1 ), () => {
 
-						const arrowSDF = SDFArrow( uvCellNDC, velX, velY );
+						const arrowSDF = SDFArrow( uvCellNDC, velX, velY, arrowHeadRadius );
 
 						textureColor.assign( mix( white, textureColor, smoothstep( 0.0, 0.02, arrowSDF ) ) );
 
@@ -985,7 +996,7 @@
 				// 	  X = Current Cell, ^ = vertical velocity of surrounding cell
 				//    [^] [^] [^]
 				//    [^] [x] [^]  Fluid moving in the x-direction will be more influenced
-				//    [^] [^] [^]  by cells at indices 1, 2, and 5.
+				//    [^] [^] [^]  by cells at indices 1, 2, 3 and 5.
 				//   -------------> x-direction
 				effectController[ 'Wind Tunnel' ].computeAdvectFluidX = Fn( () => {
 
@@ -1018,14 +1029,14 @@
 
 				// Advect Velocity Y
 				// 1. Infer need to compute from scalars
-				// 2. Get average x velocity from the surrounding cells to the left since.
+				// 2. Get average x velocity from the current cell and the surrounding cells to the left.
 				//    These cells are mostly likely to influence where the hypothetical particle
 				//    moving in the y-direction lands.
 				//     X = Current Cell, > = horizontal velocity of surrounding cell
 				//	^
 				//  |  [>] [>] [>]
 				//  |  [>] [x] [>]  Fluid moving in the y-direction will be more influenced
-				//  |  [>] [>] [>]  by cells at indices 3, 6, and 7.
+				//  |  [>] [>] [>]  by cells at indices 3, 4, 6, and 7.
 				//  |
 				//  y-direction
 				effectController[ 'Wind Tunnel' ].computeAdvectFluidY = Fn( () => {
@@ -1110,7 +1121,6 @@
 				console.log( `Window Dimensions : ${window.innerWidth} x ${window.innerHeight}` );
 				console.log( `Canvas Dimensions: ${canvas.width} x ${canvas.height}` );
 				console.log( `Simulation Scale: ${cScale}` );
-				console.log();
 
 				setupSceneDivergencePlayground();
 				setupSceneWindTunnel();
@@ -1228,10 +1238,7 @@
 
 				}
 
-				console.log( infoCurrentScene.infoStorage );
-
 				const info = new Int32Array( await renderer.getArrayBufferAsync( infoCurrentScene.infoStorage.value ) );
-				console.log( info );
 
 				divElements.info_panel.innerHTML = `Min Pressure: ${info[ 0 ] / 1000} Max Pressure: ${info[ 1 ] / 1000}`;
 
