@@ -138,7 +138,7 @@
 			const canvas = document.getElementById( 'c' );
 
 			// Uniform across all scenes
-			let simHeight, cScale, simWidth, domainHeight, domainWidth, res;
+			let simHeight, cScale, simWidth, domainHeight, domainWidth;
 
 			// UTILITY FUNCTIONS
 			// All functions use camelCase signatures.
@@ -157,23 +157,6 @@
 			// })
 
 			// FRAGMENT SHADER UTILITIES
-			const RotateUV = Fn( ( [ point, angle ] ) => {
-
-				const cosAngle = cos( angle );
-				const sinAngle = sin( angle );
-				const rotateX = cosAngle.mul( point.x ).add( sinAngle.mul( point.y ) );
-				const rotateY = negate( sinAngle ).mul( point.x ).add( cosAngle.mul( point.y ) );
-				return vec2( rotateX, rotateY );
-
-			} ).setLayout( {
-				name: 'rotateUV',
-				type: 'vec2',
-				inputs: [
-					{ name: 'point', type: 'vec2' },
-					{ name: 'angle', type: 'float' }
-				]
-
-			} );
 
 			const GetBorder = Fn( ( [ p, width ] ) => {
 
@@ -446,11 +429,6 @@
 			// COMPUTE UTILITIES
 
 			// Projection / Divergence Step
-			const calculateCellOutflow = ( velXArray, velYArray, cellIndex, bufferCols ) => {
-
-				return ( velXArray[ cellIndex + 1 ] + velYArray[ cellIndex + bufferCols ] ) - ( velXArray[ cellIndex ] + velYArray[ cellIndex ] );
-
-			};
 			
 			const calculateCellOutflowTSL = ( velXReadNode, velYReadNode, cellIndexNode, rIndexNode, uIndexNode ) => {
 
@@ -538,6 +516,72 @@
 			
 			};
 
+			// Extrapolate velocity of buffer cells from surrounding simulation cells.
+			// Effectively a post-processing part of the divergence/outflow/incompressibility step.
+			// Shader is a bit of hack, making use of the fact that our grid dimensions are always square.
+			//
+			// [x]<-[ ][ ]->[x]
+			// [x]<-[o][o]->[x]
+			// [x]<-[o][o]->[x]
+			// [x]<-[ ][ ]->[x]
+			// o = sim grid cells, x = extrapolateY operation cells
+			// Arrows demonstrate how buffer cell velocity is extrapolated
+			const createExtrapolateXShader = ( sceneInfo ) => {
+			
+				const extrapolateXShader = Fn( () => {
+
+					const { divVelXStorage } = sceneInfo;
+
+					// Buffer cell to left of first simulation column
+					const cellLeftBufferIndex = instanceIndex.mul( sceneInfo.bufferCols );
+					// Buffer cell to right of last simulation column
+					const cellRightBufferIndex = cellLeftBufferIndex.add( sceneInfo.bufferCols - 1 );
+
+					// Apply horizontal velocity of simulation cells to left and right buffer cells
+					const leftBufferVelocity = divVelXStorage.element( cellLeftBufferIndex );
+					leftBufferVelocity.assign( divVelXStorage.element( cellLeftBufferIndex.add( 1 ) ) );
+
+					const rightBufferVelocity = divVelXStorage.element( cellRightBufferIndex );
+					rightBufferVelocity.assign( divVelXStorage.element( cellRightBufferIndex.sub( 1 ) ) );
+
+			
+				} )().compute( sceneInfo.bufferRows );
+
+				sceneInfo.computeExtrapolateX = extrapolateXShader;
+			
+			};
+
+			// [x][x][x][x]
+			//  ^  ^  ^  ^
+			// [ ][o][o][ ]
+			// [ ][o][o][ ]
+			//  l  l  l  l
+			// [x][x][x][x]
+			// o = sim grid cells, x = extrapolateY operation cells
+			const createExtrapolateYShader = ( sceneInfo ) => {
+			
+				const extrapolateYShader = Fn( () => {
+
+					const { divVelYStorage } = sceneInfo;
+
+					// Buffer cell below first simulation row
+					const cellBottomBufferIndex = instanceIndex;
+					// Buffer cell above last simulation row
+					const cellTopBufferIndex = instanceIndex.add( sceneInfo.bufferCols * sceneInfo.bufferRows - 1 );
+
+					// Apply vertical velocity of simulation cells to top and bottom buffer cells
+					divVelYStorage.element( cellBottomBufferIndex ).assign(
+						divVelYStorage.element( cellBottomBufferIndex.add( sceneInfo.bufferCols ) )
+					);
+
+					divVelYStorage.element( cellTopBufferIndex ).assign( divVelYStorage.element( cellTopBufferIndex.sub( sceneInfo.bufferCols ) ) );
+
+				} )().compute( sceneInfo.bufferCols );
+
+				sceneInfo.computeExtrapolateY = extrapolateYShader;
+			
+			};
+
 			// Advection step
 			// Fan out to all cells immediately to the current cell's left, average their velocities with the current cell
 			const averageVelocityYTSL = ( velYReadNode, cellIndex ) => {
@@ -610,6 +654,96 @@
 				val.addAssign( txty.mul( fieldToReadNode.element( y1.mul( currentBufferCols ).add( x1 ) ) ) );
 
 				return val;
+
+			};
+
+			// Advect Velocity X
+			// 1. Infer need to compute from scalars
+			// 2. Get average y velocity from the surrounding cells to the right since.
+			//    These cells are mostly likely to influence where the hypothetical particle
+			//    moving in the x-direction lands.
+			// 	  X = Current Cell, ^ = vertical velocity of surrounding cell
+			//    [^] [^] [^]
+			//    [^] [x] [^]  Fluid moving in the x-direction will be more influenced
+			//    [^] [^] [^]  by cells at indices 1, 2, 3 and 5.
+			//   -------------> x-direction
+			const createAdvectXShader = ( sceneInfo ) => {
+
+				sceneInfo.computeAdvectFluidX = Fn( () => {
+
+					const { currentSimCols, currentBufferCols } = effectController;
+					const { scalarStorage, divVelXStorage, divVelYStorage, currentVelXStorage } = sceneInfo;
+
+					const cellIndex = GetBufferCellIndexFromSimIndex( currentSimCols + 1, currentBufferCols );
+
+					const scalarCell = scalarStorage.element( cellIndex );
+					const scalarCellLeft = scalarStorage.element( cellIndex.sub( 1 ) );
+
+					// If there is nowhere for the velocity to advect from
+					If( scalarCell.equal( 0.0 ).or( scalarCellLeft.equal( 0.0 ) ), () => {
+
+						Return();
+
+					} );
+
+					const x = float( 1.0 );
+					const y = float( 1.0 );
+
+					const velX = currentVelXStorage.element( cellIndex );
+					const velY = averageVelocityYTSL( divVelYStorage, cellIndex );
+					x.subAssign( velX.mul( timerDelta() ) );
+					y.subAssign( velY.mul( timerDelta() ) );
+
+					velX.assign( sampleFieldTSL( U_FIELD, divVelXStorage ) );
+
+
+				} )().compute( ( sceneInfo.simCols + 1 ) * sceneInfo.simRows );
+
+			};
+
+			// Advect Velocity Y
+			// 1. Infer need to compute from scalars
+			// 2. Get average x velocity from the current cell and the surrounding cells to the left.
+			//    These cells are mostly likely to influence where the hypothetical particle
+			//    moving in the y-direction lands.
+			//     X = Current Cell, > = horizontal velocity of surrounding cell
+			//	^
+			//  |  [>] [>] [>]
+			//  |  [>] [x] [>]  Fluid moving in the y-direction will be more influenced
+			//  |  [>] [>] [>]  by cells at indices 3, 4, 6, and 7.
+			//  |
+			//  y-direction
+			const createAdvectYShader = ( sceneInfo ) => {
+
+				sceneInfo.computeAdvectFluidY = Fn( () => {
+
+					const { currentSimCols, currentBufferCols } = effectController;
+					const { scalarStorage, divVelXStorage, divVelYStorage, currentVelXStorage } = sceneInfo;
+
+					const cellIndex = GetBufferCellIndexFromSimIndex( currentSimCols + 1, currentBufferCols );
+
+					const scalarCell = scalarStorage.element( cellIndex );
+					const scalarCellLeft = scalarStorage.element( cellIndex.sub( 1 ) );
+
+					// If there is nowhere for the velocity to advect from
+					If( scalarCell.equal( 0.0 ).or( scalarCellLeft.equal( 0.0 ) ), () => {
+
+						Return();
+
+					} );
+
+					const x = float( 1.0 );
+					const y = float( 1.0 );
+
+					const velX = currentVelXStorage.element( cellIndex );
+					const velY = averageVelocityYTSL( divVelYStorage, cellIndex );
+					x.subAssign( velX.mul( timerDelta() ) );
+					y.subAssign( velY.mul( timerDelta() ) );
+
+					velX.assign( sampleFieldTSL( U_FIELD, divVelXStorage ) );
+
+
+				} )().compute( ( sceneInfo.simCols + 1 ) * sceneInfo.simRows );
 
 			};
 
@@ -720,15 +854,9 @@
 
 				} )().compute( 1 );
 
-				canvas.addEventListener( 'click', ( event ) => {
+				canvas.addEventListener( 'click', ( ) => {
 
-					//renderer.compute( addObstacle );
-
-					for ( const projectionShader of divergencePlaygroundInfo.computeProjection ) {
-
-						renderer.compute( projectionShader );
-
-					}
+					renderer.compute( addObstacle );
 
 				} );
 
@@ -885,8 +1013,8 @@
 				renderer.compute( divergencePlaygroundInfo.initShaders[ initialFlowMap ] );
 
 				// Create Compute Shaders
-				createProjectionComputeShaders( effectController[ 'Divergence Playground' ] );
-				effectController[ 'Divergence Playground' ][ 'Run Divergence Step' ] = () => {
+				createProjectionComputeShaders( divergencePlaygroundInfo );
+				divergencePlaygroundInfo[ 'Run Divergence Step' ] = () => {
 
 					for ( let i = 0; i < effectController.divergenceIterations; i ++ ) {
 			
@@ -900,11 +1028,13 @@
 
 				};
 
+				createExtrapolateXShader( divergencePlaygroundInfo );
+				createExtrapolateYShader( divergencePlaygroundInfo );
+				// createAdvectXShader(divergencePlaygroundInfo)
+				// createAdvectYShader(divergencePlaygroundInfo)
+
 				// Create visualizer
 				sceneDivergencePlayground = new THREE.Scene();
-
-				const quadWidth = 2 / simCols;
-				const quadHeight = 2 / simRows;
 
 				//const geometry = new THREE.PlaneGeometry(quadWidth, quadHeight);
 				const geometry = new THREE.PlaneGeometry( 2, 2 );
@@ -921,7 +1051,7 @@
 			
 				const divergenceFragmentNode = Fn( () => {
 
-					const { divVelXStorage, divVelYStorage, arrowOn, arrowHeadRadius } = divergencePlaygroundInfo;
+					const { divVelXStorage, divVelYStorage, arrowOn, arrowHeadRadius, scalarStorage } = divergencePlaygroundInfo;
 
 					const { currentSimCols, maxVelocity, currentSimRows, currentBufferCols } = effectController;
 
@@ -1046,147 +1176,13 @@
 					const cellIndex = GetBufferCellIndexFromSimIndex( instanceIndex, currentSimCols, currentBufferCols );
 					divVelYStorage.element( cellIndex ).addAssign( gravity.mul( time ) );
 
-				} )().compute( effectController[ 'Wind Tunnel' ].numSimCells );
+				} )().compute( windTunnelInfo.numSimCells );
 
-				createProjectionComputeShaders( effectController[ 'Wind Tunnel' ] );
-
-				// Extrapolate velocity of buffer cells from surrounding simulation cells.
-				// Effectively a post-processing part of the divergence/outflow/incompressibility step.
-				// Shader is a bit of hack, making use of the fact that our grid dimensions are always square.
-
-
-				// [x]<-[ ][ ]->[x]
-				// [x]<-[o][o]->[x]
-				// [x]<-[o][o]->[x]
-				// [x]<-[ ][ ]->[x]
-				// o = sim grid cells, x = extrapolateY operation cells
-				// Arrows demonstrate how buffer cell velocity is extrapolated
-				effectController[ 'Wind Tunnel' ].computeExtrapolateX = Fn( () => {
-
-					const { divVelXStorage } = windTunnelInfo;
-
-					// Buffer cell to left of first simulation column
-					const cellLeftBufferIndex = instanceIndex.mul( bufferCols );
-					// Buffer cell to right of last simulation column
-					const cellRightBufferIndex = cellLeftBufferIndex.add( bufferCols - 1 );
-
-					// Apply horizontal velocity of simulation cells to left and right buffer cells
-					const leftBufferVelocity = divVelXStorage.element( cellLeftBufferIndex );
-					leftBufferVelocity.assign( divVelXStorage.element( cellLeftBufferIndex.add( 1 ) ) );
-
-					const rightBufferVelocity = divVelXStorage.element( cellRightBufferIndex );
-					rightBufferVelocity.assign( divVelXStorage.element( cellRightBufferIndex.sub( 1 ) ) );
-
-				} )().compute( bufferRows );
-
-				// [x][x][x][x]
-				//  ^  ^  ^  ^
-				// [ ][o][o][ ]
-				// [ ][o][o][ ]
-				//  l  l  l  l
-				// [x][x][x][x]
-				// o = sim grid cells, x = extrapolateY operation cells
-				effectController[ 'Wind Tunnel' ].computeExtrapolateY = Fn( () => {
-
-					const { divVelYStorage } = windTunnelInfo;
-
-					// Buffer cell below first simulation row
-					const cellBottomBufferIndex = instanceIndex;
-					// Buffer cell above last simulation row
-					const cellTopBufferIndex = instanceIndex.add( bufferCols * bufferRows - 1 );
-
-					// Apply vertical velocity of simulation cells to top and bottom buffer cells
-					divVelYStorage.element( cellBottomBufferIndex ).assign(
-						divVelYStorage.element( cellBottomBufferIndex.add( bufferCols ) )
-					);
-
-					divVelYStorage.element( cellTopBufferIndex ).assign( divVelYStorage.element( cellTopBufferIndex.sub( bufferCols ) ) );
-
-				} )().compute( bufferCols );
-
-
-				// Advect Velocity X
-				// 1. Infer need to compute from scalars
-				// 2. Get average y velocity from the surrounding cells to the right since.
-				//    These cells are mostly likely to influence where the hypothetical particle
-				//    moving in the x-direction lands.
-				// 	  X = Current Cell, ^ = vertical velocity of surrounding cell
-				//    [^] [^] [^]
-				//    [^] [x] [^]  Fluid moving in the x-direction will be more influenced
-				//    [^] [^] [^]  by cells at indices 1, 2, 3 and 5.
-				//   -------------> x-direction
-				effectController[ 'Wind Tunnel' ].computeAdvectFluidX = Fn( () => {
-
-					const { currentSimCols, currentBufferCols } = effectController;
-					const { scalarStorage, divVelXStorage, divVelYStorage, currentVelXStorage } = windTunnelInfo;
-
-					const cellIndex = GetBufferCellIndexFromSimIndex( currentSimCols + 1, currentBufferCols );
-
-					const scalarCell = scalarStorage.element( cellIndex );
-					const scalarCellLeft = scalarStorage.element( cellIndex.sub( 1 ) );
-
-					// If there is nowhere for the velocity to advect from
-					If( scalarCell.equal( 0.0 ).or( scalarCellLeft.equal( 0.0 ) ), () => {
-
-						Return();
-
-					} );
-
-					const x = float( 1.0 );
-					const y = float( 1.0 );
-
-					const velX = currentVelXStorage.element( cellIndex );
-					const velY = averageVelocityYTSL( divVelYStorage, cellIndex );
-					x.subAssign( velX.mul( timerDelta() ) );
-					y.subAssign( velY.mul( timerDelta() ) );
-
-					velX.assign( sampleFieldTSL( U_FIELD, divVelXStorage ) );
-
-
-				} )().compute( ( effectController[ 'Wind Tunnel' ].simCols + 1 ) * effectController[ 'Wind Tunnel' ].simRows );
-
-				// Advect Velocity Y
-				// 1. Infer need to compute from scalars
-				// 2. Get average x velocity from the current cell and the surrounding cells to the left.
-				//    These cells are mostly likely to influence where the hypothetical particle
-				//    moving in the y-direction lands.
-				//     X = Current Cell, > = horizontal velocity of surrounding cell
-				//	^
-				//  |  [>] [>] [>]
-				//  |  [>] [x] [>]  Fluid moving in the y-direction will be more influenced
-				//  |  [>] [>] [>]  by cells at indices 3, 4, 6, and 7.
-				//  |
-				//  y-direction
-				effectController[ 'Wind Tunnel' ].computeAdvectFluidY = Fn( () => {
-
-					const { currentSimCols, currentBufferCols } = effectController;
-
-					const cellIndex = GetBufferCellIndexFromSimIndex( currentSimCols + 1, currentBufferCols );
-
-					const { scalarStorage, divVelXStorage, divVelYStorage } = windTunnelInfo;
-
-					const scalarCell = scalarStorage.element( cellIndex );
-					const scalarCellLeft = scalarStorage.element( cellIndex.sub( 1 ) );
-
-					// If there is nowhere for the velocity to advect frokm
-					If( scalarCell.equal( 0.0 ).or( scalarCellLeft.equal( 0.0 ) ), () => {
-
-						Return();
-
-					} );
-
-					const x = float( 1.0 );
-					const y = float( 1.0 );
-
-					const velX = averageVelocityXTSL( divVelXStorage, cellIndex );
-					const velY = divVelYStorage.element( cellIndex );
-					x.subAssign( velX.mul( timerDelta() ) );
-					y.subAssign( velY.mul( timerDelta() ) );
-
-					velY.assign( sampleFieldTSL( V_FIELD, divVelYStorage ) );
-
-
-				} )().compute( ( effectController[ 'Wind Tunnel' ].simCols + 1 ) * effectController[ 'Wind Tunnel' ].simRows );
+				createProjectionComputeShaders( windTunnelInfo );
+				createExtrapolateXShader( windTunnelInfo );
+				createExtrapolateYShader( windTunnelInfo );
+				createAdvectXShader( windTunnelInfo );
+				createAdvectYShader( windTunnelInfo );
 
 				effectController[ 'Wind Tunnel' ].computeAdvectSmoke = Fn( () => {
 
