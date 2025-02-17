@@ -745,7 +745,7 @@
 					const y = ( h.mul( bufferGridY ) ).add( h2 );
 
 					const divVelX = divVelXStorage.element( cellIndex );
-					const divVelY = averageVelocityYTSL( divVelYStorage, cellIndex );
+					const divVelY = averageVelocityLowerRightTSL( divVelYStorage, cellIndex );
 					x.subAssign( divVelX.mul( deltaTime ) );
 					y.subAssign( divVelY.mul( deltaTime ) );
 
@@ -797,7 +797,7 @@
 					const x = h.mul( bufferGridX ).add( h2 );
 					const y = h.mul( bufferGridY );
 
-					const velX = averageVelocityXTSL( divVelXStorage, cellIndex );
+					const velX = averageVelocityUpperLeftTSL( divVelXStorage, cellIndex );
 					const velY = divVelYStorage.element( cellIndex );
 					x.subAssign( velX.mul( time ) );
 					y.subAssign( velY.mul( time ) );
