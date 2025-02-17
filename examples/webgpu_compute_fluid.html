@@ -44,7 +44,7 @@
 
 			import * as THREE from 'three';
 			// In TSL, unless directly operating on a node, nearly every function you deploy needs to be imported from Nodes.js
-			import { vec2, bool, atomicMin, atomicStore, atomicMax, vec3, vec4, rotate, hash, instancedArray, sqrt, attributeArray, sign, mix, uint, Fn, time, smoothstep, step, radians, atan, cos, sin, clamp, length, abs, min, max, float, timerDelta, cond, positionGeometry, varying, varyingProperty, floor, uv, If, temp, negate, storage, wgslFn, code, instanceIndex, uniform, Return, texture, fract, not } from 'three/tsl';
+			import { vec2, bool, atomicMin, atomicStore, atomicMax, vec3, vec4, rotate, hash, instancedArray, sqrt, attributeArray, sign, mix, uint, Fn, time, smoothstep, step, radians, atan, cos, sin, clamp, length, abs, min, max, float, deltaTime, cond, positionGeometry, varying, varyingProperty, floor, uv, If, temp, negate, storage, wgslFn, code, instanceIndex, uniform, Return, texture, fract, not } from 'three/tsl';
 
 			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
 
@@ -89,7 +89,8 @@
 				computeExtrapolateX: null,
 				computeExtrapolateY: null,
 				// Advection steps
-				computeAdvectFluid: null,
+				computeAdvectFluidX: null,
+				computeAdvectFluidY: null,
 				computeAdvectSmoke: null,
 			};
 			// TODO: Delete objects on scene switch then reinitialize later
@@ -429,6 +430,20 @@
 			// COMPUTE UTILITIES
 
 			// Projection / Divergence Step
+
+			const createCopyDivergenceToCurrentShader = ( sceneInfo ) => {
+
+				const shader = Fn( () => {
+
+					const { divVelXStorage, divVelYStorage, currentVelXStorage, currentVelYStorage } = sceneInfo;
+					currentVelXStorage.element( instanceIndex ).assign( divVelXStorage.element( instanceIndex ) );
+					currentVelYStorage.element( instanceIndex ).assign( divVelYStorage.element( instanceIndex ) );
+			
+				} )().compute( sceneInfo.numBufferCells );
+			
+				sceneInfo.computeCopyDivergenceToCurrent = shader;
+			
+			};
 			
 			const calculateCellOutflowTSL = ( velXReadNode, velYReadNode, cellIndexNode, rIndexNode, uIndexNode ) => {
 
@@ -582,67 +597,105 @@
 			
 			};
 
-			// Advection step
-			// Fan out to all cells immediately to the current cell's left, average their velocities with the current cell
-			const averageVelocityYTSL = ( velYReadNode, cellIndex ) => {
+			// Get average velocity of these cells
+			// 	  X = Current Cell, o = important cells
+			//    [o] [o] [ ]
+			//    [o] [x] [ ]
+			//    [ ] [ ] [ ]
+			const averageVelocityUpperLeftTSL = ( readNode, cellIndex ) => {
 
-				const yCurrent = velYReadNode.element( cellIndex );
-				const yLeft = velYReadNode.element( cellIndex.sub( 1 ) );
-				const yUpperLeft = velYReadNode.element( cellIndex.sub( 1 ).add( currentBufferCols ) );
-				const yUp = velYReadNode.element( cellIndex.add( currentBufferCols ) );
+				const { currentBufferCols } = effectController;
 
-				const velocities = yCurrent.add( yLeft ).add( yUpperLeft ).add( yUp );
+				const current = readNode.element( cellIndex );
+				const left = readNode.element( cellIndex.sub( 1 ) );
+				const upperLeft = readNode.element( cellIndex.sub( 1 ).add( currentBufferCols ) );
+				const up = readNode.element( cellIndex.add( currentBufferCols ) );
+
+				const velocities = current.add( left ).add( upperLeft ).add( up );
 
 				return velocities.mul( 0.25 );
 
 			};
 
-			const averageVelocityXTSL = ( velXReadNode, cellIndex ) => {
+			// Get average velocity of these cells
+			// 	  X = Current Cell, o = important cells
+			//    [ ] [ ] [ ]
+			//    [ ] [x] [o]
+			//    [ ] [o] [o]
+			const averageVelocityLowerRightTSL = ( readNode, cellIndex ) => {
 
-				const xCurrent = velXReadNode.element( cellIndex );
-				const xRight = velXReadNode.element( cellIndex.add( 1 ) );
+				const { currentBufferCols } = effectController;
 
-				const velocities = float( 1.0 );
+				const current = readNode.element( cellIndex );
+				const right = readNode.element( cellIndex.add( 1 ) );
+				const lowerRight = readNode.element( cellIndex.add( 1 ).sub( currentBufferCols ) );
+				const below = readNode.element( cellIndex.sub( currentBufferCols ) );
+
+				const velocities = current.add( right ).add( lowerRight ).add( below );
+
 				return velocities.mul( 0.25 );
 
 			};
 
 			
-			const U_FIELD = 0;
-			const V_FIELD = 1;
-			const S_FIELD = 2;
+			const U_FIELD = uint( 0 );
+			const V_FIELD = uint( 1 );
+			const S_FIELD = uint( 2 );
 
 
-			const sampleFieldTSL = ( fieldEnumNode, fieldToReadNode ) => {
+			const sampleFieldTSL = ( sceneInfo, fieldEnumNode, fieldToReadNode, xNode, yNode ) => {
 
 				const { currentBufferCols, currentBufferRows } = effectController;
+				const { h } = sceneInfo;
 
-				const x = max( min( x, currentBufferCols.mul( h ) ), h );
-				const y = max( min( y, currentBufferRows.mul( h ) ), h );
+				// Clamp x within the dimensions 1 -> bufferGrid.width
+				const x = max( min( xNode, currentBufferCols.mul( h ) ), h );
+				// Clamp y within the dimensions 1 -> bufferGrid.height
+				const y = max( min( yNode, currentBufferRows.mul( h ) ), h );
 
-				const notUField = not( fieldEnumNode.equal( U_FIELD ) );
-				const notVField = not( fieldEnumNode.equal( V_FIELD ) );
-				const h2 = float( h ).mul( h );
 				const h1 = float( 1.0 ).div( h );
+				const h2 = float( 0.5 ).mul( h );
 
-				const dx = notUField.mul( h2 );
-				const dy = notVField.mul( h2 );
+				const dx = h2.toVar( 'dx' );
+				const dy = h2.toVar( 'dy' );
+
+				// IF U_Field, no delta dy
+				If( fieldEnumNode.equal( U_FIELD ), () => {
+
+					dy.assign( 0.0 );
+			
+					// If V_FIELD, no delta dx
+			
+				} ).ElseIf( fieldEnumNode.equal( V_FIELD ), () => {
+
+					dy.assign( 0.0 );
+
+				} );
+
+				// Otherwise S_FIELD
 
 				const xDiff = x.sub( dx );
 				const yDiff = y.sub( dy );
 
-
+				// Get the cell that's being advected from in terms of units of h
+				// Clamp to only go from 0 -> bufferCols - 1
 				const x0 = min( floor( xDiff.mul( h1 ) ), currentBufferCols.sub( 1 ) );
+			
+				// Offset from outer edge of the cell in cell units?
 				const tx = ( xDiff.sub( x0.mul( h ) ) ).mul( h1 );
+
+				// Index of the cell that is being advedted into?
 				const x1 = min( x0.add( 1 ), currentBufferCols.sub( 1 ) );
 
 				const y0 = min( floor( yDiff.mul( h1 ) ), currentBufferRows.sub( 1 ) );
 				const ty = ( yDiff.sub( y0.mul( h ) ) ).mul( h1 );
-				const y1 = Math.min( y0.add( 1 ), currentBufferRows.sub( 1 ) );
+				const y1 = min( y0.add( 1 ), currentBufferRows.sub( 1 ) );
 
+				// Distance towards the next cell from point tx?
 				const sx = float( 1.0 ).sub( tx );
 				const sy = float( 1.0 ).sub( ty );
 
+				// Dimensions of sub grids within a single cell?
 				const sxsy = sx.mul( sy );
 				const txsy = tx.mul( sy );
 				const txty = tx.mul( ty );
@@ -659,14 +712,7 @@
 
 			// Advect Velocity X
 			// 1. Infer need to compute from scalars
-			// 2. Get average y velocity from the surrounding cells to the right since.
-			//    These cells are mostly likely to influence where the hypothetical particle
-			//    moving in the x-direction lands.
-			// 	  X = Current Cell, ^ = vertical velocity of surrounding cell
-			//    [^] [^] [^]
-			//    [^] [x] [^]  Fluid moving in the x-direction will be more influenced
-			//    [^] [^] [^]  by cells at indices 1, 2, 3 and 5.
-			//   -------------> x-direction
+			// 2. Get average y velocity from the surrounding cells.
 			const createAdvectXShader = ( sceneInfo ) => {
 
 				sceneInfo.computeAdvectFluidX = Fn( () => {
@@ -674,7 +720,10 @@
 					const { currentSimCols, currentBufferCols } = effectController;
 					const { scalarStorage, divVelXStorage, divVelYStorage, currentVelXStorage } = sceneInfo;
 
-					const cellIndex = GetBufferCellIndexFromSimIndex( currentSimCols + 1, currentBufferCols );
+					// 1-Dimensional index in the buffer grid
+					const cellIndex = GetBufferCellIndexFromSimIndex( instanceIndex, currentSimCols.add( 1 ), currentBufferCols );
+
+					// 2-Dimensional Index in the buffer Grid
 
 					const scalarCell = scalarStorage.element( cellIndex );
 					const scalarCellLeft = scalarStorage.element( cellIndex.sub( 1 ) );
@@ -686,16 +735,23 @@
 
 					} );
 
-					const x = float( 1.0 );
-					const y = float( 1.0 );
+					const bufferGridX = cellIndex.modInt( currentBufferCols );
+					const bufferGridY = cellIndex.div( currentBufferCols );
 
-					const velX = currentVelXStorage.element( cellIndex );
-					const velY = averageVelocityYTSL( divVelYStorage, cellIndex );
-					x.subAssign( velX.mul( timerDelta() ) );
-					y.subAssign( velY.mul( timerDelta() ) );
+					const h = float( sceneInfo.h );
+					const h2 = float( sceneInfo.h * 0.5 );
 
-					velX.assign( sampleFieldTSL( U_FIELD, divVelXStorage ) );
+					const x = h.mul( bufferGridX );
+					const y = ( h.mul( bufferGridY ) ).add( h2 );
 
+					const divVelX = divVelXStorage.element( cellIndex );
+					const divVelY = averageVelocityYTSL( divVelYStorage, cellIndex );
+					x.subAssign( divVelX.mul( deltaTime ) );
+					y.subAssign( divVelY.mul( deltaTime ) );
+
+					const fieldSample = sampleFieldTSL( sceneInfo, U_FIELD, divVelXStorage, x, y );
+
+					currentVelXStorage.element( cellIndex ).assign( fieldSample );
 
 				} )().compute( ( sceneInfo.simCols + 1 ) * sceneInfo.simRows );
 
@@ -718,33 +774,57 @@
 				sceneInfo.computeAdvectFluidY = Fn( () => {
 
 					const { currentSimCols, currentBufferCols } = effectController;
-					const { scalarStorage, divVelXStorage, divVelYStorage, currentVelXStorage } = sceneInfo;
+					const { scalarStorage, divVelXStorage, divVelYStorage, currentVelXStorage, currentVelYStorage } = sceneInfo;
 
-					const cellIndex = GetBufferCellIndexFromSimIndex( currentSimCols + 1, currentBufferCols );
+					const cellIndex = GetBufferCellIndexFromSimIndex( instanceIndex, currentSimCols.add( 1 ), currentBufferCols );
 
 					const scalarCell = scalarStorage.element( cellIndex );
-					const scalarCellLeft = scalarStorage.element( cellIndex.sub( 1 ) );
+					const scalarCellBelow = scalarStorage.element( cellIndex.sub( currentBufferCols ) );
 
 					// If there is nowhere for the velocity to advect from
-					If( scalarCell.equal( 0.0 ).or( scalarCellLeft.equal( 0.0 ) ), () => {
+					If( scalarCell.equal( 0.0 ).or( scalarCellBelow.equal( 0.0 ) ), () => {
 
 						Return();
 
 					} );
 
-					const x = float( 1.0 );
-					const y = float( 1.0 );
+					const bufferGridX = cellIndex.modInt( currentBufferCols );
+					const bufferGridY = cellIndex.div( currentBufferCols );
 
-					const velX = currentVelXStorage.element( cellIndex );
-					const velY = averageVelocityYTSL( divVelYStorage, cellIndex );
-					x.subAssign( velX.mul( timerDelta() ) );
-					y.subAssign( velY.mul( timerDelta() ) );
+					const h = float( sceneInfo.h );
+					const h2 = float( sceneInfo.h * 0.5 );
+
+					const x = h.mul( bufferGridX ).add( h2 );
+					const y = h.mul( bufferGridY );
+
+					const velX = averageVelocityXTSL( divVelXStorage, cellIndex );
+					const velY = divVelYStorage.element( cellIndex );
+					x.subAssign( velX.mul( time ) );
+					y.subAssign( velY.mul( time ) );
 
 					velX.assign( sampleFieldTSL( U_FIELD, divVelXStorage ) );
 
 
 				} )().compute( ( sceneInfo.simCols + 1 ) * sceneInfo.simRows );
 
+			};
+
+			const createComputeReset = ( sceneInfo ) => {
+
+				const shader = Fn( () => {
+
+					const { divVelXStorage, divVelYStorage, currentVelXStorage, currentVelYStorage, pressureStorage } = sceneInfo;
+					// Reset pressure information to 0.
+					pressureStorage.element( instanceIndex ).assign( 0.0 );
+					// Assign final advection result to current velocity result
+
+					divVelXStorage.element( instanceIndex ).assign( currentVelXStorage.element( instanceIndex ) );
+					divVelYStorage.element( instanceIndex ).assign( currentVelYStorage.element( instanceIndex ) );
+
+				} )().compute( sceneInfo.numBufferCells );
+
+				sceneInfo.computeReset = shader;
+			
 			};
 
 			// Scene setup utils
@@ -789,15 +869,17 @@
 				// Constants specific to divergence playground
 				const outflowIndicatorMaxRadius = 0.5;
 
+				const divergencePlaygroundInfo = effectController[ 'Divergence Playground' ];
+
 				// Calculate proper cell height
 				const res = 30;
-				const h = domainHeight / res;
+				console.log( domainHeight );
+				divergencePlaygroundInfo.h = domainHeight / res;
+				console.log( divergencePlaygroundInfo.h );
 
 				// Get proper buffer grid and simulation grid dimensions
-				const { simCols, simRows } = getSimGridDimensions( h );
+				const { simCols, simRows } = getSimGridDimensions( divergencePlaygroundInfo.h );
 				const { bufferCols, bufferRows } = getBufferGridDimensions( simCols, simRows, 1 );
-
-				const divergencePlaygroundInfo = effectController[ 'Divergence Playground' ];
 
 				// Create scene info template, which gets filled out as we initialize this scene
 				divergencePlaygroundInfo.simCols = simCols;
@@ -864,33 +946,31 @@
 				divergencePlaygroundInfo.clearScalar = createClearScalarShader( divergencePlaygroundInfo );
 				renderer.compute( divergencePlaygroundInfo.clearScalars );
 
-				divergencePlaygroundInfo.computeReset = Fn( () => {
-			
-					const { divVelXStorage, divVelYStorage, currentVelXStorage, currentVelYStorage, pressureStorage } = divergencePlaygroundInfo;
-					// Reset pressure information to 0.
-					pressureStorage.element( instanceIndex ).assign( 0.0 );
-					// Assign final advection result to current velocity result
-
-					divVelXStorage.element( instanceIndex ).assign( currentVelXStorage.element( instanceIndex ) );
-					divVelYStorage.element( instanceIndex ).assign( currentVelYStorage.element( instanceIndex ) );
-
-				} )().compute( divergencePlaygroundInfo.numBufferCells );
+				createComputeReset( divergencePlaygroundInfo );
 			
 				// Pseudo-Random (not really since hash is static)
 				divergencePlaygroundInfo.initShaders[ 'Random' ] = Fn( () => {
 
 					const { currentSimCols, currentBufferCols, maxVelocity } = effectController;
-					const { divVelXStorage, divVelYStorage, scalarStorage } = divergencePlaygroundInfo;
+					const { divVelXStorage, divVelYStorage, currentVelXStorage, currentVelYStorage, scalarStorage } = divergencePlaygroundInfo;
 
 					const cellIndex = GetBufferCellIndexFromSimIndex( instanceIndex, currentSimCols, currentBufferCols );
 					const randX = hash( instanceIndex );
 					const randY = hash( instanceIndex.add( 2 ) );
-					divVelXStorage.element( cellIndex ).assign( floor(
+					const velX = floor(
 						randX.mul( float( maxVelocity ).mul( 2 ) ).sub( maxVelocity )
-					) );
-					divVelYStorage.element( cellIndex ).assign( floor(
+					);
+					const velY = floor(
 						randY.mul( float( maxVelocity ).mul( 2 ) ).sub( maxVelocity )
-					) );
+					);
+
+					// Assign to divergence step for proper calculation
+					divVelXStorage.element( cellIndex ).assign( velX );
+					divVelYStorage.element( cellIndex ).assign( velY );
+
+					// Assign to current for display
+					currentVelXStorage.element( cellIndex ).assign( velX );
+					currentVelYStorage.element( cellIndex ).assign( velY );
 
 					scalarStorage.element( cellIndex ).assign( 1 );
 			
@@ -900,7 +980,7 @@
 				divergencePlaygroundInfo.initShaders[ 'Left Wall' ] = Fn( () => {
 
 					const { currentSimCols, currentBufferCols } = effectController;
-					const { divVelXStorage, divVelYStorage, scalarStorage } = divergencePlaygroundInfo;
+					const { divVelXStorage, divVelYStorage, currentVelXStorage, currentVelYStorage, scalarStorage } = divergencePlaygroundInfo;
 
 					const bufferCellIndex = GetBufferCellIndexFromSimIndex( instanceIndex, currentSimCols, currentBufferCols );
 
@@ -908,6 +988,9 @@
 
 						divVelXStorage.element( bufferCellIndex ).assign( 8.0 );
 						divVelYStorage.element( bufferCellIndex ).assign( 0.0 );
+			
+						currentVelXStorage.element( bufferCellIndex ).assign( 8.0 );
+						currentVelYStorage.element( bufferCellIndex ).assign( 0.0 );
 
 						scalarStorage.element( bufferCellIndex ).assign( 1 );
 
@@ -917,6 +1000,9 @@
 
 					divVelXStorage.element( bufferCellIndex ).assign( 0.0 );
 					divVelYStorage.element( bufferCellIndex ).assign( 0.0 );
+
+					currentVelXStorage.element( bufferCellIndex ).assign( 0.0 );
+					currentVelYStorage.element( bufferCellIndex ).assign( 0.0 );
 
 					scalarStorage.element( bufferCellIndex ).assign( 1 );
 			
@@ -926,7 +1012,7 @@
 				divergencePlaygroundInfo.initShaders[ 'Right Wall' ] = Fn( () => {
 
 					const { currentSimCols, currentBufferCols } = effectController;
-					const { divVelXStorage, divVelYStorage, scalarStorage } = divergencePlaygroundInfo;
+					const { divVelXStorage, divVelYStorage, currentVelXStorage, currentVelYStorage, scalarStorage } = divergencePlaygroundInfo;
 
 					const bufferCellIndex = GetBufferCellIndexFromSimIndex( instanceIndex, currentSimCols, currentBufferCols );
 
@@ -934,6 +1020,9 @@
 
 						divVelXStorage.element( bufferCellIndex ).assign( - 8.0 );
 						divVelYStorage.element( bufferCellIndex ).assign( 0.0 );
+			
+						currentVelXStorage.element( bufferCellIndex ).assign( - 8.0 );
+						currentVelYStorage.element( bufferCellIndex ).assign( 0.0 );						divVelYStorage.element( bufferCellIndex ).assign( 0.0 );
 
 						scalarStorage.element( bufferCellIndex ).assign( 1 );
 
@@ -943,6 +1032,9 @@
 
 					divVelXStorage.element( bufferCellIndex ).assign( 0.0 );
 					divVelYStorage.element( bufferCellIndex ).assign( 0.0 );
+
+					currentVelXStorage.element( bufferCellIndex ).assign( 0.0 );
+					currentVelYStorage.element( bufferCellIndex ).assign( 0.0 );
 
 					scalarStorage.element( bufferCellIndex ).assign( 1 );
 			
@@ -953,12 +1045,16 @@
 				divergencePlaygroundInfo.initShaders[ 'Alternate Vertical' ] = Fn( () => {
 
 					const { currentSimCols, currentBufferCols } = effectController;
-					const { divVelXStorage, divVelYStorage, scalarStorage } = divergencePlaygroundInfo;
+					const { divVelXStorage, divVelYStorage, currentVelXStorage, currentVelYStorage, scalarStorage } = divergencePlaygroundInfo;
 
 					const cellIndex = GetBufferCellIndexFromSimIndex( instanceIndex, currentSimCols, currentBufferCols );
 					const isUp = cellIndex.modInt( 2 );
+			
 					divVelXStorage.element( cellIndex ).assign( 0 );
 					divVelYStorage.element( cellIndex ).assign( isUp.equal( 0 ).select( 4, - 4 ) );
+
+					currentVelXStorage.element( cellIndex ).assign( 0 );
+					currentVelYStorage.element( cellIndex ).assign( isUp.equal( 0 ).select( 4, - 4 ) );
 
 					scalarStorage.element( cellIndex ).assign( 1 );
 			
@@ -968,12 +1064,15 @@
 				divergencePlaygroundInfo.initShaders[ 'Alternate Horizontal' ] = Fn( () => {
 
 					const { currentSimCols, currentBufferCols } = effectController;
-					const { divVelXStorage, divVelYStorage, scalarStorage } = divergencePlaygroundInfo;
+					const { divVelXStorage, divVelYStorage, currentVelXStorage, currentVelYStorage, scalarStorage } = divergencePlaygroundInfo;
 
 					const cellIndex = GetBufferCellIndexFromSimIndex( instanceIndex, currentSimCols, currentBufferCols );
 					const isUp = instanceIndex.modInt( currentSimCols ).modInt( 2 );
 					divVelXStorage.element( cellIndex ).assign( isUp.equal( 0 ).select( 4, - 4 ) );
 					divVelYStorage.element( cellIndex ).assign( 0 );
+
+					currentVelXStorage.element( cellIndex ).assign( isUp.equal( 0 ).select( 4, - 4 ) );
+					currentVelYStorage.element( cellIndex ).assign( 0 );
 
 					scalarStorage.element( cellIndex ).assign( 1 );
 			
@@ -982,11 +1081,14 @@
 				divergencePlaygroundInfo.initShaders[ 'Zero Velocity' ] = Fn( () => {
 
 					const { currentSimCols, currentBufferCols } = effectController;
-					const { divVelXStorage, divVelYStorage, scalarStorage } = divergencePlaygroundInfo;
+					const { divVelXStorage, divVelYStorage, currentVelXStorage, currentVelYStorage, scalarStorage } = divergencePlaygroundInfo;
 
 					const cellIndex = GetBufferCellIndexFromSimIndex( instanceIndex, currentSimCols, currentBufferCols );
 					divVelXStorage.element( cellIndex ).assign( 0 );
 					divVelYStorage.element( cellIndex ).assign( 0 );
+
+					currentVelXStorage.element( cellIndex ).assign( 0 );
+					currentVelYStorage.element( cellIndex ).assign( 0 );
 
 					scalarStorage.element( cellIndex ).assign( 1 );
 			
@@ -995,15 +1097,20 @@
 				divergencePlaygroundInfo.initShaders[ 'Converge Horizontal' ] = Fn( () => {
 
 					const { currentSimCols, currentBufferCols } = effectController;
-					const { divVelXStorage, divVelYStorage, scalarStorage } = divergencePlaygroundInfo;
+					const { divVelXStorage, divVelYStorage, currentVelXStorage, currentVelYStorage, scalarStorage } = divergencePlaygroundInfo;
 
 					const halfSize = currentSimCols.div( 2 );
 
 					const isLeftSide = instanceIndex.modInt( currentSimCols ).div( halfSize );
 
 					const cellIndex = GetBufferCellIndexFromSimIndex( instanceIndex, currentSimCols, currentBufferCols );
+			
 					divVelXStorage.element( cellIndex ).assign( isLeftSide.equal( 0 ).select( 4, - 4 ) );
 					divVelYStorage.element( cellIndex ).assign( 0 );
+
+					currentVelXStorage.element( cellIndex ).assign( isLeftSide.equal( 0 ).select( 4, - 4 ) );
+					currentVelYStorage.element( cellIndex ).assign( 0 );
+
 					scalarStorage.element( cellIndex ).assign( 1 );
 			
 				} )().compute( divergencePlaygroundInfo.numSimCells );
@@ -1012,13 +1119,19 @@
 
 				renderer.compute( divergencePlaygroundInfo.initShaders[ initialFlowMap ] );
 
-				// Create Compute Shaders
 				createProjectionComputeShaders( divergencePlaygroundInfo );
+				createCopyDivergenceToCurrentShader( divergencePlaygroundInfo );
+				createExtrapolateXShader( divergencePlaygroundInfo );
+				createExtrapolateYShader( divergencePlaygroundInfo );
+				createAdvectXShader( divergencePlaygroundInfo );
+				// createAdvectYShader(divergencePlaygroundInfo)
+
+				// Create Compute Shaders
 				divergencePlaygroundInfo[ 'Run Divergence Step' ] = () => {
 
 					for ( let i = 0; i < effectController.divergenceIterations; i ++ ) {
 			
-						for ( const projectionShader of effectController[ 'Divergence Playground' ].computeProjection ) {
+						for ( const projectionShader of divergencePlaygroundInfo.computeProjection ) {
 
 							renderer.compute( projectionShader );
 
@@ -1026,12 +1139,18 @@
 			
 					}
 
+					renderer.compute( divergencePlaygroundInfo.computeCopyDivergenceToCurrent );
+
 				};
 
-				createExtrapolateXShader( divergencePlaygroundInfo );
-				createExtrapolateYShader( divergencePlaygroundInfo );
-				// createAdvectXShader(divergencePlaygroundInfo)
-				// createAdvectYShader(divergencePlaygroundInfo)
+				divergencePlaygroundInfo[ 'Run Advection Step' ] = () => {
+
+					renderer.compute( divergencePlaygroundInfo.computeExtrapolateX );
+					renderer.compute( divergencePlaygroundInfo.computeExtrapolateY );
+					renderer.compute( divergencePlaygroundInfo.computeAdvectFluidX );
+					renderer.compute( divergencePlaygroundInfo.computeAdvectFluidY );
+
+				};
 
 				// Create visualizer
 				sceneDivergencePlayground = new THREE.Scene();
@@ -1051,11 +1170,11 @@
 			
 				const divergenceFragmentNode = Fn( () => {
 
-					const { divVelXStorage, divVelYStorage, arrowOn, arrowHeadRadius, scalarStorage } = divergencePlaygroundInfo;
+					const { divVelXStorage, currentVelXStorage, divVelYStorage, arrowOn, arrowHeadRadius, scalarStorage } = divergencePlaygroundInfo;
 
 					const { currentSimCols, maxVelocity, currentSimRows, currentBufferCols } = effectController;
 
-					const velXRead = divVelXStorage;
+					const velXRead = currentVelXStorage;
 					const velYRead = divVelYStorage;
 
 					const uvGrid = uv().mul( vec2( currentSimCols, currentSimRows ) ).toVar( 'uvGridNode' );
@@ -1130,7 +1249,7 @@
 				} );
 
 				const nodeMaterial = new THREE.MeshBasicNodeMaterial();
-				nodeMaterial.colorNode = divergenceFragmentNode();
+				nodeMaterial.fragmentNode = divergenceFragmentNode();
 				const mesh = new THREE.Mesh( geometry, nodeMaterial );
 
 				sceneDivergencePlayground.add( mesh );
@@ -1262,6 +1381,7 @@
 
 				const divergencePlaygroundFolder = gui.addFolder( 'Divergence Playground' );
 				divergencePlaygroundFolder.add( effectController[ 'Divergence Playground' ], 'Run Divergence Step' );
+				divergencePlaygroundFolder.add( effectController[ 'Divergence Playground' ], 'Run Advection Step' );
 				divergencePlaygroundFolder.add( effectController[ 'Divergence Playground' ].arrowOn, 'value', [ true, false ] ).name( 'Arrow On' ).onChange( () =>{
 
 			
@@ -1286,7 +1406,6 @@
 					const currentFlowMap = effectController[ 'Divergence Playground' ][ 'Flow Map' ];
 					const initShader = effectController[ 'Divergence Playground' ].initShaders[ currentFlowMap ];
 					renderer.compute( initShader );
-
 
 				} ).name( 'Flow Map' );
 
@@ -1356,9 +1475,9 @@
 				}
 
 				// Advect Fluid
-				if ( infoCurrentScene.computeAdvectFluid ) {
+				if ( infoCurrentScene.computeAdvectFluidX && effectController.advectionOn ) {
 
-					renderer.compute( infoCurrentScene.computeAdvectFluid );
+					renderer.compute( infoCurrentScene.computeAdvectFluidX );
 
 				}
 
