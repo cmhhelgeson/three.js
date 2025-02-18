@@ -794,7 +794,7 @@
 					const h = float( sceneInfo.h );
 					const h2 = float( sceneInfo.h * 0.5 );
 
-					const x = h.mul( bufferGridX );
+					const x = bufferGridX.mul( h );
 					const y = ( h.mul( bufferGridY ) ).add( h2 );
 
 					const divVelX = divVelXStorage.element( cellIndex );
@@ -841,14 +841,14 @@
 
 					} );
 
-					const bufferGridX = cellIndex.modInt( currentBufferCols );
-					const bufferGridY = cellIndex.div( currentBufferCols );
+					const bufferGridX = cellIndex.modInt( currentBufferCols ).toVar( 'bufferGridX' );
+					const bufferGridY = cellIndex.div( currentBufferCols ).toVar( 'bufferGridY' );
 
 					const h = float( sceneInfo.h );
 					const h2 = float( sceneInfo.h * 0.5 );
 
 					const x = h.mul( bufferGridX ).add( h2 );
-					const y = h.mul( bufferGridY );
+					const y = bufferGridY.mul( h );
 
 					const velX = averageVelocityUpperLeftTSL( divVelXStorage, cellIndex );
 					const velY = divVelYStorage.element( cellIndex );
@@ -1015,15 +1015,17 @@
 
 				} )().compute( 1 );
 
+				console.log( addObstacle );
+
 				canvas.addEventListener( 'click', ( ) => {
 
-					renderer.compute( addObstacle );
+					renderer.computeAsync( addObstacle );
 
 				} );
 
 				// Initialize all cells as obstacles at first
 				divergencePlaygroundInfo.clearScalar = createClearScalarShader( divergencePlaygroundInfo );
-				renderer.compute( divergencePlaygroundInfo.clearScalars );
+				renderer.computeAsync( divergencePlaygroundInfo.clearScalars );
 
 				createComputeReset( divergencePlaygroundInfo );
 			
@@ -1196,7 +1198,7 @@
 
 				const initialFlowMap = divergencePlaygroundInfo[ 'Flow Map' ];
 
-				renderer.compute( divergencePlaygroundInfo.initShaders[ initialFlowMap ] );
+				renderer.computeAsync( divergencePlaygroundInfo.initShaders[ initialFlowMap ] );
 
 				createProjectionComputeShaders( divergencePlaygroundInfo );
 				createCopyDivergenceToCurrentShader( divergencePlaygroundInfo );
@@ -1212,27 +1214,23 @@
 			
 						for ( const projectionShader of divergencePlaygroundInfo.computeProjection ) {
 
-							renderer.compute( projectionShader );
+							renderer.computeAsync( projectionShader );
 
 						}
 			
 					}
 
-					renderer.compute( divergencePlaygroundInfo.computeCopyDivergenceToCurrent );
+					renderer.computeAsync( divergencePlaygroundInfo.computeCopyDivergenceToCurrent );
 
 				};
 
 				divergencePlaygroundInfo[ 'Run Advection Step' ] = () => {
 
-					renderer.compute( divergencePlaygroundInfo.computeExtrapolateX );
-					renderer.compute( divergencePlaygroundInfo.computeExtrapolateY );
+					renderer.computeAsync( divergencePlaygroundInfo.computeExtrapolateX );
+					renderer.computeAsync( divergencePlaygroundInfo.computeExtrapolateY );
 
-					for ( let i = 0; i < effectController.advectionIterations; i ++ ) {
-
-						renderer.compute( divergencePlaygroundInfo.computeAdvectFluidX );
-						renderer.compute( divergencePlaygroundInfo.computeAdvectFluidY );
-			
-					}
+					renderer.computeAsync( divergencePlaygroundInfo.computeAdvectFluidX );
+					renderer.computeAsync( divergencePlaygroundInfo.computeAdvectFluidY );
 
 				};
 
@@ -1475,10 +1473,9 @@
 					]
 				).onChange( () => {
 
-					const divergencePlaygroundInfo = effectController[ 'Divergence Playground' ];
 					const currentFlowMap = effectController[ 'Divergence Playground' ][ 'Flow Map' ];
 					const initShader = effectController[ 'Divergence Playground' ].initShaders[ currentFlowMap ];
-					renderer.compute( initShader );
+					renderer.computeAsync( initShader );
 
 				} ).name( 'Flow Map' );
 
@@ -1501,14 +1498,14 @@
 
 				if ( infoCurrentScene.computeReset && effectController.advectionOn ) {
 
-					renderer.compute( infoCurrentScene.computeReset );
+					renderer.computeAsync( infoCurrentScene.computeReset );
 			
 				}
 
 				// Apply external forces ( gravity, outside actors, user chicanery) to velocity
 				if ( infoCurrentScene.computeIntegration ) {
 
-					renderer.compute( infoCurrentScene.computeIntegration );
+					renderer.computeAsync( infoCurrentScene.computeIntegration );
 
 				}
 
@@ -1521,7 +1518,7 @@
 
 						for ( const projectionShader of infoCurrentScene.computeProjection ) {
 
-							renderer.compute( projectionShader );
+							renderer.computeAsync( projectionShader );
 
 						}
 			
@@ -1532,14 +1529,14 @@
 				// Extrapolate velocities of buffer cells in each column
 				if ( infoCurrentScene.computeExtrapolateX ) {
 
-					renderer.compute( infoCurrentScene.computeExtrapolateX );
+					renderer.computeAsync( infoCurrentScene.computeExtrapolateX );
 
 				}
 
 				// Extrapolate velocities of buffer cells in each row
 				if ( infoCurrentScene.computeExtrapolateY ) {
 
-					renderer.compute( infoCurrentScene.computeExtrapolateY );
+					renderer.computeAsync( infoCurrentScene.computeExtrapolateY );
 
 				}
 
@@ -1548,7 +1545,7 @@
 
 					for ( let i = 0; i < effectController.advectionIterations; i ++ ) {
 
-						renderer.compute( infoCurrentScene.computeAdvectFluidX );
+						renderer.computeAsync( infoCurrentScene.computeAdvectFluidX );
 
 					}
 
@@ -1558,7 +1555,7 @@
 
 					for ( let i = 0; i < effectController.advectionIterations; i ++ ) {
 
-						renderer.compute( infoCurrentScene.computeAdvectFluidY );
+						renderer.computeAsync( infoCurrentScene.computeAdvectFluidY );
 
 					}
 
@@ -1567,9 +1564,11 @@
 				// Advect Smoke
 				if ( infoCurrentScene.computeAdvectSmoke ) {
 
+					console.log( 'Advect Smoke' );
+
 					for ( let i = 0; i < effectController.advectionIterations; i ++ ) {
 
-						renderer.compute( infoCurrentScene.computeAdvectSmoke );
+						renderer.computeAsync( infoCurrentScene.computeAdvectSmoke );
 
 					}
 
