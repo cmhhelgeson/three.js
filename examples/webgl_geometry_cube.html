@@ -7,10 +7,18 @@
 		<link type="text/css" rel="stylesheet" href="main.css">
 	</head>
 	<body>
+		<div id="info" style="position: absolute; display: flex; justify-content: space-around;">
+			<div>WebGL Renderer</div>
+			<div>WebGPU WebGPUBackend</div>
+			<div>WebGPU WebGLBackend</div>
+		
+		</div>
+		<div id="root" style="display: flex"></div>
 		<script type="importmap">
 			{
 				"imports": {
 					"three": "../build/three.module.js",
+					"three/webgpu": "../build/three.webgpu.js",
 					"three/addons/": "./jsm/"
 				}
 			}
@@ -19,35 +27,62 @@
 		<script type="module">
 
 			import * as THREE from 'three';
+			import * as THREEGPU from 'three/webgpu';
+			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
 
-			let camera, scene, renderer;
+			let camera, scene;
 			let mesh;
+			
+			let webGLRenderer;
+			let webGPUBackendRenderer;
+			let webGLBackendRenderer;
+			let appendElement;
+			let gui;
+
+			const effectController = {
+				renderer: 'WebGL',
+			};
+
+			let thirdWidth = window.innerWidth / 3;
 
 			init();
 
 			function init() {
 
 				camera = new THREE.PerspectiveCamera( 70, window.innerWidth / window.innerHeight, 0.1, 100 );
-				camera.position.z = 2;
+				camera.position.z = 4;
 
 				scene = new THREE.Scene();
-
-				const texture = new THREE.TextureLoader().load( 'textures/crate.gif' );
-				texture.colorSpace = THREE.SRGBColorSpace;
-
-				const geometry = new THREE.BoxGeometry();
-				const material = new THREE.MeshBasicMaterial( { map: texture } );
+			
+				const geometry = new THREE.TorusKnotGeometry();
+				const material = new THREE.MeshNormalMaterial();
 
 				mesh = new THREE.Mesh( geometry, material );
 				scene.add( mesh );
 
-				renderer = new THREE.WebGLRenderer( { antialias: true } );
-				renderer.setPixelRatio( window.devicePixelRatio );
-				renderer.setSize( window.innerWidth, window.innerHeight );
-				renderer.setAnimationLoop( animate );
-				document.body.appendChild( renderer.domElement );
+				// Create WebGLRenderer
+				webGLRenderer = new THREE.WebGLRenderer( { antialias: true } );
+				webGLRenderer.setPixelRatio( window.devicePixelRatio );
+				webGLRenderer.setSize( thirdWidth, window.innerHeight );
+				webGLRenderer.setAnimationLoop( animate );
 
-				//
+				// Create WebGPURenderer
+				webGPUBackendRenderer = new THREEGPU.WebGPURenderer( { antialias: true } );
+				webGPUBackendRenderer.setPixelRatio( window.devicePixelRatio );
+				webGPUBackendRenderer.setSize( thirdWidth, window.innerHeight );
+				webGPUBackendRenderer.setAnimationLoop( animate );
+
+				// Create WebGPURenderer WebGL Backend Renderer
+				webGLBackendRenderer = new THREEGPU.WebGPURenderer( { antialias: true, forceWebGL: true } );
+				webGLBackendRenderer.setPixelRatio( window.devicePixelRatio );
+				webGLBackendRenderer.setSize( thirdWidth, window.innerHeight );
+				webGLBackendRenderer.setAnimationLoop( animate );
+
+				const rootElement = document.getElementById( 'root' );
+
+				rootElement.appendChild( webGLRenderer.domElement );
+				rootElement.appendChild( webGPUBackendRenderer.domElement );
+				rootElement.appendChild( webGLBackendRenderer.domElement );
 
 				window.addEventListener( 'resize', onWindowResize );
 
@@ -58,16 +93,21 @@
 				camera.aspect = window.innerWidth / window.innerHeight;
 				camera.updateProjectionMatrix();
 
-				renderer.setSize( window.innerWidth, window.innerHeight );
+				thirdWidth = window.innerWidth / 3;
+
+				webGLRenderer.setSize( thirdWidth, window.innerHeight );
+				webGPUBackendRenderer.setSize( thirdWidth, window.innerHeight );
+				webGLBackendRenderer.setSize( thirdWidth, window.innerHeight );
 
 			}
 
 			function animate() {
 
-				mesh.rotation.x += 0.005;
-				mesh.rotation.y += 0.01;
+				mesh.rotation.y += 0.005;
 
-				renderer.render( scene, camera );
+				webGLRenderer.render( scene, camera );
+				webGPUBackendRenderer.renderAsync( scene, camera );
+				webGLBackendRenderer.renderAsync( scene, camera );
 
 			}
 
