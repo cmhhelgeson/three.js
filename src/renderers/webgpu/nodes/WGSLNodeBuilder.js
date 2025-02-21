@@ -1560,7 +1560,16 @@ ${ flowData.code }
 
 					let attributesSnippet = `@location( ${index} )`;
 
-					if ( /^(int|uint|ivec|uvec)/.test( varying.type ) ) {
+					// Check for user-defined interpolation
+					if ( varying.interpolationType ) {
+
+						const samplingSnippet = varying.interpolationSampling ? `, ${varying.interpolationSampling} )` : ')';
+
+						attributesSnippet += ` @interpolate( ${varying.interpolationType}${samplingSnippet}`;
+
+						// Otherwise, optimize interpolation when sensible
+
+					} else if ( /^(int|uint|ivec|uvec)/.test( varying.type ) ) {
 
 						attributesSnippet += ' @interpolate( flat )';
 

@@ -55,6 +55,23 @@ class VaryingNode extends Node {
 		 */
 		this.isVaryingNode = true;
 
+		/**
+		 * The interpolation type of the varying data.
+		 *
+		 * @type {?string}
+		 * @default null
+		 */
+		this.interpolationType = null;
+
+		/**
+		 * The interpolation sampling type of varying data.
+		 *
+		 * @type {?string}
+		 * @default null
+		 */
+		this.interpolationSampling = null;
+
+
 	}
 
 	/**
@@ -66,6 +83,20 @@ class VaryingNode extends Node {
 	isGlobal( /*builder*/ ) {
 
 		return true;
+
+	}
+
+	setInterpolation( interpolationType ) {
+
+		this.interpolationType = interpolationType;
+		return this;
+
+	}
+
+	setSampling( interpolationSampling ) {
+
+		this.interpolationSampling = interpolationSampling;
+		return this;
 
 	}
 
