@@ -40,7 +40,7 @@
 			let gui;
 
 			const effectController = {
-				renderer: 'WebGL',
+				emulateWebGLOutput: false,
 			};
 
 			let thirdWidth = window.innerWidth / 3;
@@ -55,7 +55,9 @@
 				scene = new THREE.Scene();
 			
 				const geometry = new THREE.TorusKnotGeometry();
-				const material = new THREE.MeshNormalMaterial();
+				const material = new THREE.MeshNormalMaterial( { emulateWebGLOutput: false } );
+
+				console.log( material );
 
 				mesh = new THREE.Mesh( geometry, material );
 				scene.add( mesh );
@@ -70,12 +72,14 @@
 				webGPUBackendRenderer = new THREEGPU.WebGPURenderer( { antialias: true } );
 				webGPUBackendRenderer.setPixelRatio( window.devicePixelRatio );
 				webGPUBackendRenderer.setSize( thirdWidth, window.innerHeight );
+				webGPUBackendRenderer.toneMapping = THREE.LinearToneMapping;
 				webGPUBackendRenderer.setAnimationLoop( animate );
 
 				// Create WebGPURenderer WebGL Backend Renderer
 				webGLBackendRenderer = new THREEGPU.WebGPURenderer( { antialias: true, forceWebGL: true } );
 				webGLBackendRenderer.setPixelRatio( window.devicePixelRatio );
 				webGLBackendRenderer.setSize( thirdWidth, window.innerHeight );
+				webGLBackendRenderer.toneMapping = THREE.LinearToneMapping;
 				webGLBackendRenderer.setAnimationLoop( animate );
 
 				const rootElement = document.getElementById( 'root' );
@@ -83,6 +87,16 @@
 				rootElement.appendChild( webGLRenderer.domElement );
 				rootElement.appendChild( webGPUBackendRenderer.domElement );
 				rootElement.appendChild( webGLBackendRenderer.domElement );
+
+				const gui = new GUI();
+
+				gui.add( effectController, 'emulateWebGLOutput' ).onChange( () => {
+
+					material.emulateWebGLOutput = effectController.emulateWebGLOutput;
+					material.needsUpdate = true;
+
+			
+				} );
 
 				window.addEventListener( 'resize', onWindowResize );
 

@@ -3,9 +3,10 @@ import { diffuseColor } from '../../nodes/core/PropertyNode.js';
 import { directionToColor } from '../../nodes/utils/Packing.js';
 import { materialOpacity } from '../../nodes/accessors/MaterialNode.js';
 import { transformedNormalView } from '../../nodes/accessors/Normal.js';
-import { float, vec4 } from '../../nodes/tsl/TSLBase.js';
+import { float, toWorkingColorSpace, vec4 } from '../../nodes/tsl/TSLBase.js';
 
 import { MeshNormalMaterial } from '../MeshNormalMaterial.js';
+import { LinearSRGBColorSpace, SRGBColorSpace } from '../../constants.js';
 
 const _defaultValues = /*@__PURE__*/ new MeshNormalMaterial();
 
@@ -40,6 +41,8 @@ class MeshNormalNodeMaterial extends NodeMaterial {
 		 */
 		this.isMeshNormalNodeMaterial = true;
 
+		this.emulateWebGLOutput = ( parameters && parameters.emulateWebGLOutput ) ? parameters.emulateWebGLOutput : false;
+
 		this.setDefaultValues( _defaultValues );
 
 		this.setValues( parameters );
@@ -54,7 +57,15 @@ class MeshNormalNodeMaterial extends NodeMaterial {
 
 		const opacityNode = this.opacityNode ? float( this.opacityNode ) : materialOpacity;
 
-		diffuseColor.assign( vec4( directionToColor( transformedNormalView ), opacityNode ) );
+		if ( this.emulateWebGLOutput ) {
+
+			diffuseColor.assign( toWorkingColorSpace( vec4( directionToColor( transformedNormalView ), opacityNode ), SRGBColorSpace ) );
+
+		} else {
+
+			diffuseColor.assign( vec4( directionToColor( transformedNormalView ), opacityNode ) );
+
+		}
 
 	}
 

@@ -70,6 +70,8 @@ class ColorSpaceNode extends TempNode {
 
 		if ( colorSpace === WORKING_COLOR_SPACE ) {
 
+			console.log( ColorManagement.workingColorSpace );
+
 			return ColorManagement.workingColorSpace;
 
 		} else if ( colorSpace === OUTPUT_COLOR_SPACE ) {
@@ -134,7 +136,12 @@ export default ColorSpaceNode;
  * @param {Node} node - Represents the node to convert.
  * @returns {ColorSpaceNode}
  */
-export const toOutputColorSpace = ( node ) => nodeObject( new ColorSpaceNode( nodeObject( node ), WORKING_COLOR_SPACE, OUTPUT_COLOR_SPACE ) );
+export const toOutputColorSpace = ( node ) => {
+
+	console.log( node );
+	return nodeObject( new ColorSpaceNode( nodeObject( node ), WORKING_COLOR_SPACE, OUTPUT_COLOR_SPACE ) );
+
+};
 
 /**
  * TSL function for converting a given color node to the current working color space.
@@ -144,7 +151,12 @@ export const toOutputColorSpace = ( node ) => nodeObject( new ColorSpaceNode( no
  * @param {Node} node - Represents the node to convert.
  * @returns {ColorSpaceNode}
  */
-export const toWorkingColorSpace = ( node ) => nodeObject( new ColorSpaceNode( nodeObject( node ), OUTPUT_COLOR_SPACE, WORKING_COLOR_SPACE ) );
+export const toWorkingColorSpace = ( node ) => {
+
+	console.log( node );
+	return nodeObject( new ColorSpaceNode( nodeObject( node ), OUTPUT_COLOR_SPACE, WORKING_COLOR_SPACE ) );
+
+};
 
 /**
  * TSL function for converting a given color node from the current working color space to the given color space.
