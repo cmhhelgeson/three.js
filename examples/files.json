@@ -304,6 +304,7 @@
 		"webgpu_camera_logarithmicdepthbuffer",
 		"webgpu_clearcoat",
 		"webgpu_clipping",
+		"webgpu_centroid_sampling",
 		"webgpu_compute_audio",
 		"webgpu_compute_birds",
 		"webgpu_compute_geometry",
