@@ -60,6 +60,8 @@
 			import * as THREE from 'three';
 			import { storage, If, vec3, not, varying, uniform, uv, texture, uint, float, Fn, vec2, abs, int, invocationLocalIndex, workgroupArray, uvec2, floor, instanceIndex, workgroupBarrier, atomicAdd, atomicStore, workgroupId } from 'three/tsl';
 
+			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+
 
 			let rendererAntialiasingEnabled;
 			let rendererAntialiasingDisabled;
@@ -67,6 +69,11 @@
 			let camera;
 			let scene;
 			let orbitControls;
+			let gui;
+
+			const effectController = {
+				sampling: 'centroid'
+			};
 
 			const atlasCanvas = document.createElement( 'canvas' );
 			atlasCanvas.width = 16;
@@ -150,11 +157,23 @@
 
 				const material = new THREE.MeshBasicNodeMaterial();
 
-				material.colorNode = Fn( () => {
+				const withInterpolationShader = Fn( () => {
+
+					const testUV = varying( uv(), 'testUV' ).setInterpolation( 'perspective', 'centroid' );
+
+					return texture( canvasTexture, testUV ).rgb;
+
+				} );
+
+				const withoutInterpolationShader = Fn( () => {
 
 					return texture( canvasTexture, uv() ).rgb;
 
-				} )();
+				} );
+
+				material.colorNode = withInterpolationShader();
+
+				const faceMeshes = [];
 
 				for ( let x = - 5; x < 5; x ++ ) {
 
@@ -164,6 +183,7 @@
 						const geometry = makeFaceGeometry( face );
 						const mesh = new THREE.Mesh( geometry, material );
 						mesh.position.set( x * 2, y * 2, 0 );
+						faceMeshes.push( mesh );
 						scene.add( mesh );
 			
 					}
@@ -191,6 +211,31 @@
 				document.body.querySelector( '#antialising-disabled' ).appendChild( rendererAntialiasingDisabled.domElement );
 
 				window.addEventListener( 'resize', onWindowResize );
+
+				gui = new GUI();
+				gui.add( effectController, 'sampling', [ 'normal', 'centroid' ] ).onChange( () => {
+
+					let shader;
+
+					if ( effectController.sampling === 'centroid' ) {
+
+						shader = withInterpolationShader;
+
+					} else {
+
+						shader = withoutInterpolationShader;
+
+					}
+
+					for ( let i = 0; i < faceMeshes.length; i ++ ) {
+
+						faceMeshes[ i ].material.colorNode = shader();
+						faceMeshes[ i ].material.needsUpdate = true;
+
+					}
+
+			
+				} );
 
 			}
 

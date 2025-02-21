@@ -89,27 +89,14 @@ class VaryingNode extends Node {
 	/**
 	 * Defines the interpolation type of the varying.
 	 *
-	 * @param {string} value - The interpolation type.
+	 * @param {string} type - The interpolation type.
+	 * @param {?string} sampling - The interpolation sampling type
 	 * @return {VaryingNode} A reference to this node.
 	 */
-	setInterpolation( value ) {
+	setInterpolation( type, sampling = null ) {
 
-		console.log( value );
-
-		this.interpolationType = value;
-		return this;
-
-	}
-
-	/**
-	 * Defines the interpolation sampling of the varying.
-	 *
-	 * @param {string} value - The interpolation type.
-	 * @return {VaryingNode} A reference to this node.
-	 */
-	setSampling( value ) {
-
-		this.interpolationSampling = value;
+		this.interpolationType = type;
+		this.interpolationSampling = sampling;
 		return this;
 
 	}
