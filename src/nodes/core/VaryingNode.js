@@ -86,16 +86,30 @@ class VaryingNode extends Node {
 
 	}
 
-	setInterpolation( interpolationType ) {
+	/**
+	 * Defines the interpolation type of the varying.
+	 *
+	 * @param {string} value - The interpolation type.
+	 * @return {VaryingNode} A reference to this node.
+	 */
+	setInterpolation( value ) {
 
-		this.interpolationType = interpolationType;
+		console.log( value );
+
+		this.interpolationType = value;
 		return this;
 
 	}
 
-	setSampling( interpolationSampling ) {
+	/**
+	 * Defines the interpolation sampling of the varying.
+	 *
+	 * @param {string} value - The interpolation type.
+	 * @return {VaryingNode} A reference to this node.
+	 */
+	setSampling( value ) {
 
-		this.interpolationSampling = interpolationSampling;
+		this.interpolationSampling = value;
 		return this;
 
 	}
@@ -130,8 +144,9 @@ class VaryingNode extends Node {
 
 			const name = this.name;
 			const type = this.getNodeType( builder );
+			console.log( this.interpolationType );
 
-			properties.varying = varying = builder.getVaryingFromNode( this, name, type );
+			properties.varying = varying = builder.getVaryingFromNode( this, name, type, this.interpolationType, this.interpolationSampling );
 			properties.node = this.node;
 
 		}

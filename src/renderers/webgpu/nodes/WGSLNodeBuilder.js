@@ -1558,12 +1558,14 @@ ${ flowData.code }
 
 				if ( varying.needsInterpolation ) {
 
+					console.log( varying );
+
 					let attributesSnippet = `@location( ${index} )`;
 
 					// Check for user-defined interpolation
 					if ( varying.interpolationType ) {
 
-						const samplingSnippet = varying.interpolationSampling ? `, ${varying.interpolationSampling} )` : ')';
+						const samplingSnippet = varying.interpolationSampling !== null ? `, ${varying.interpolationSampling} )` : ' )';
 
 						attributesSnippet += ` @interpolate( ${varying.interpolationType}${samplingSnippet}`;
 
@@ -1843,6 +1845,7 @@ ${ flowData.code }
 
 			this.vertexShader = this._getWGSLVertexCode( shadersData.vertex );
 			this.fragmentShader = this._getWGSLFragmentCode( shadersData.fragment );
+			console.log( this.fragmentShader );
 
 		} else {
 

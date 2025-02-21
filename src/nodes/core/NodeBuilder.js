@@ -1829,6 +1829,7 @@ class NodeBuilder {
 
 			if ( name === null ) name = 'nodeVarying' + index;
 
+			console.log( interpolationType );
 			nodeVarying = new NodeVarying( name, type, interpolationType, interpolationSampling );
 
 			varyings.push( nodeVarying );
