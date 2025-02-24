@@ -336,6 +336,8 @@ class WebGLRenderer {
 
 		initGLContext();
 
+		console.log( state );
+
 		// xr
 
 		const xr = new WebXRManager( _this, _gl );
@@ -1819,6 +1821,7 @@ class WebGLRenderer {
 			const morphTargetsCount = ( morphAttribute !== undefined ) ? morphAttribute.length : 0;
 
 			const materialProperties = properties.get( material );
+			console.log( currentRenderState );
 			const lights = currentRenderState.state.lights;
 
 			if ( _clippingEnabled === true ) {

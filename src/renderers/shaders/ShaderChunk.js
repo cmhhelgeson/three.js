@@ -92,6 +92,7 @@ import shadowmap_pars_vertex from './ShaderChunk/shadowmap_pars_vertex.glsl.js';
 import shadowmap_vertex from './ShaderChunk/shadowmap_vertex.glsl.js';
 import shadowmask_pars_fragment from './ShaderChunk/shadowmask_pars_fragment.glsl.js';
 import skinbase_vertex from './ShaderChunk/skinbase_vertex.glsl.js';
+import prev_skinning_pars_vertex from './ShaderChunk/prev_skinning_pars_vertex.glsl.js';
 import skinning_pars_vertex from './ShaderChunk/skinning_pars_vertex.glsl.js';
 import skinning_vertex from './ShaderChunk/skinning_vertex.glsl.js';
 import skinnormal_vertex from './ShaderChunk/skinnormal_vertex.glsl.js';
@@ -104,6 +105,7 @@ import transmission_pars_fragment from './ShaderChunk/transmission_pars_fragment
 import uv_pars_fragment from './ShaderChunk/uv_pars_fragment.glsl.js';
 import uv_pars_vertex from './ShaderChunk/uv_pars_vertex.glsl.js';
 import uv_vertex from './ShaderChunk/uv_vertex.glsl.js';
+import velocity_vertex from './ShaderChunk/velocity_vertex.glsl.js';
 import worldpos_vertex from './ShaderChunk/worldpos_vertex.glsl.js';
 
 import * as background from './ShaderLib/background.glsl.js';
@@ -220,6 +222,7 @@ export const ShaderChunk = {
 	shadowmask_pars_fragment: shadowmask_pars_fragment,
 	skinbase_vertex: skinbase_vertex,
 	skinning_pars_vertex: skinning_pars_vertex,
+	prev_skinning_pars_vertex: prev_skinning_pars_vertex,
 	skinning_vertex: skinning_vertex,
 	skinnormal_vertex: skinnormal_vertex,
 	specularmap_fragment: specularmap_fragment,
@@ -231,6 +234,7 @@ export const ShaderChunk = {
 	uv_pars_fragment: uv_pars_fragment,
 	uv_pars_vertex: uv_pars_vertex,
 	uv_vertex: uv_vertex,
+	velocity_vertex: velocity_vertex,
 	worldpos_vertex: worldpos_vertex,
 
 	background_vert: background.vertex,
