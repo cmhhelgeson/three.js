@@ -179,6 +179,8 @@ export class MotionBlurPass extends Pass {
 		this.scene = scene;
 		this.camera = camera;
 
+		this.firstUpdate = true;
+
 		// list of positions from previous frames
 		this._prevPosMap = new Map();
 		this._currentFrameMod = 0;
@@ -230,6 +232,7 @@ export class MotionBlurPass extends Pass {
 		const compositeQuad = this._compositeQuad;
 		const finalBuffer = this.renderToScreen ? null : writeBuffer;
 
+		// Getthe clear values
 		_rendererState.copy( renderer, scene );
 
 		// Set the clear state
@@ -238,7 +241,11 @@ export class MotionBlurPass extends Pass {
 
 		// TODO: This is getting called just to set 'currentRenderState' in the renderer
 		// NOTE -- why do we need this?
+
 		renderer.compile( scene, camera );
+
+
+
 		this._ensurePrevCameraTransform();
 
 		switch ( debug.display ) {

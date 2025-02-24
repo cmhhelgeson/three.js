@@ -56,8 +56,8 @@
 			import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 			import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 			import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-			import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
-			//import { MotionBlurPass } from 'three/addons/postprocessing/MotionBlurPass.js';
+			import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+			import { MotionBlurPass } from 'three/addons/postprocessing/MotionBlurPass.js';
 
 			// globals
 			const params = {
@@ -75,11 +75,15 @@
 			let composer;
 			let fxaaPass, gammaPass, motionPass, renderPass;
 			let torusMesh1, torusMesh2, torusMesh3;
+			let model;
 
 			let mixer, clock, animTime = 0;
 
+			// flag indicating that we've animated on frame past the
+			// point that we stopped animation
+			let animatedOneFramePast = false;
+
 			init();
-			animate();
 
 			function init() {
 
@@ -88,13 +92,13 @@
 				camera.position.set( 0.0, 5, 5 * 3.5 );
 
 				scene = new THREE.Scene();
-				scene.background = new THREE.Color( 0xE91E63 ).convertSRGBToLinear();
+				scene.background = new THREE.Color( 0xE91E63 );
 
 				renderer = new THREE.WebGLRenderer();
 				renderer.setPixelRatio( window.devicePixelRatio );
 				renderer.setSize( window.innerWidth, window.innerHeight );
 				renderer.setAnimationLoop( animate );
-				//renderer.shadowMap.enabled = true;
+				renderer.shadowMap.enabled = true;
 				document.body.appendChild( renderer.domElement );
 
 				// geometry
@@ -145,35 +149,32 @@
 				scene.add( torusMesh3 );
 
 				// load samba dancer
-				var loader = new FBXLoader();
-				loader.load( 'https://rawgit.com/mrdoob/three.js/r106/examples/models/fbx/Samba%20Dancing.fbx', res => {
+				const loader = new GLTFLoader();
+				loader.load( 'models/gltf/Michelle.glb', function ( gltf ) {
 
-					scene.add( res );
-					res.scale.multiplyScalar( 0.05 );
-					res.traverse( c => {
+					model = gltf.scene;
+					model.children[ 0 ].children[ 0 ].castShadow = true;
+					model.scale.setScalar( 4.5, 4.5, 4.5 );
 
-						if ( c.type === 'SkinnedMesh' ) {
+					model.position.set( 0, - 5, 0 );
 
-							c.castShadow = true;
-							c.receiveShadow = true;
-							c.motionBlur = { expandGeometry: 0, interpolateGeometry: 0 };
+					mixer = new THREE.AnimationMixer( model );
 
-						}
+					const action = mixer.clipAction( gltf.animations[ 0 ] );
+					action.play();
 
-					} );
-					res.position.y = - 5;
-					mixer = new THREE.AnimationMixer( res );
-					mixer.clipAction( res.animations[ 0 ] ).play();
+					scene.add( model );
 
 				} );
+
 
 				clock = new THREE.Clock();
 
 				// Lights
-				scene.add( new THREE.HemisphereLight( 0xE91E63, 0x552233, 0.5 ) );
+				scene.add( new THREE.HemisphereLight( 0xE91E63, 0x552233, 1.0 ) );
 
-				var directionalLight = new THREE.DirectionalLight( 0xffffff, 1 );
-				directionalLight.position.set( 50, 100, 50 );
+				var directionalLight = new THREE.DirectionalLight( 0xffffff, 4 );
+				//directionalLight.position.set( 50, 100, 50 );
 				directionalLight.castShadow = true;
 
 				var shadowCam = directionalLight.shadow.camera;
@@ -199,13 +200,13 @@
 
 				gammaPass = new ShaderPass( GammaCorrectionShader );
 
-				//motionPass = new MotionBlurPass( scene, camera );
+				motionPass = new MotionBlurPass( scene, camera );
 
 				composer = new EffectComposer( renderer );
 				composer.setSize( window.innerWidth, window.innerHeight );
 				composer.setPixelRatio( window.devicePixelRatio );
 				composer.addPass( renderPass );
-				//composer.addPass( motionPass );
+				composer.addPass( motionPass );
 				composer.addPass( fxaaPass );
 				composer.addPass( gammaPass );
 
@@ -235,11 +236,11 @@
 
 					} );
 
-				/*motionFolder.add( motionPass.debug, 'display', {
+				motionFolder.add( motionPass.debug, 'display', {
 					'Motion Blur': MotionBlurPass.DEFAULT,
 					'Velocity': MotionBlurPass.VELOCITY,
 					'Geometry': MotionBlurPass.GEOMETRY
-				} ).onChange( val => motionPass.debug.display = parseFloat( val ) ); */
+				} ).onChange( val => motionPass.debug.display = parseFloat( val ) );
 				motionFolder.open();
 
 				var animFolder = gui.addFolder( 'animation' );
@@ -258,30 +259,29 @@
 
 				renderer.setSize( window.innerWidth, window.innerHeight );
 			
-				composer.setSize( width, height );
+				composer.setSize( window.innerWidth, window.innerHeight );
+				const pixelRatio = renderer.getPixelRatio();
 				composer.setPixelRatio( pixelRatio );
-				fxaaPass.uniforms.resolution.value.set( 1 / ( width * pixelRatio ), 1 / ( height * pixelRatio ) );
+				fxaaPass.material[ 'resolution' ].value.x.set( 1 / ( window.innerWidth * pixelRatio ) );
+				fxaaPass.material[ 'resolution' ].value.y.set( 1 / ( window.innerHeight * pixelRatio ) );
 
 			}
-
-			// flag indicating that we've animated on frame past the
-			// point that we stopped animation
-			let animatedOneFramePast = false;
 
 			function animate() {
 
 				// set the variables
-				/*motionPass.enabled = params.enabled;
+				motionPass.enabled = params.enabled;
+				//console.log( motionPass );
 				motionPass.samples = params.samples;
 				motionPass.expandGeometry = params.expandGeometry;
 				motionPass.interpolateGeometry = params.interpolateGeometry;
 				motionPass.renderCameraBlur = params.cameraBlur;
-				motionPass.smearIntensity = params.smearIntensity; */
+				motionPass.smearIntensity = params.smearIntensity;
 
 				camera.lookAt( scene.position );
 
 				const deltaTime = clock.getDelta();
-				//motionPass.debug.dontUpdateState = ! params.animate;
+				motionPass.debug.dontUpdateState = ! params.animate;
 
 				if ( params.animate || animatedOneFramePast === false ) {
 
