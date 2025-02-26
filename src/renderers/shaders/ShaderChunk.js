@@ -92,6 +92,7 @@ import shadowmap_pars_vertex from './ShaderChunk/shadowmap_pars_vertex.glsl.js';
 import shadowmap_vertex from './ShaderChunk/shadowmap_vertex.glsl.js';
 import shadowmask_pars_fragment from './ShaderChunk/shadowmask_pars_fragment.glsl.js';
 import skinbase_vertex from './ShaderChunk/skinbase_vertex.glsl.js';
+import prev_skinning_pars_vertex from './ShaderChunk/prev_skinning_pars_vertex.glsl.js'
 import skinning_pars_vertex from './ShaderChunk/skinning_pars_vertex.glsl.js';
 import skinning_vertex from './ShaderChunk/skinning_vertex.glsl.js';
 import skinnormal_vertex from './ShaderChunk/skinnormal_vertex.glsl.js';
@@ -219,6 +220,7 @@ export const ShaderChunk = {
 	shadowmap_vertex: shadowmap_vertex,
 	shadowmask_pars_fragment: shadowmask_pars_fragment,
 	skinbase_vertex: skinbase_vertex,
+	prev_skinning_pars_vertex: 
 	skinning_pars_vertex: skinning_pars_vertex,
 	skinning_vertex: skinning_vertex,
 	skinnormal_vertex: skinnormal_vertex,

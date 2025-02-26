@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>threejs webgl - postprocessing - per-object motion blur</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<style>
+			body {
+				background-color: #000000;
+				margin: 0px;
+				padding: 0;
+				overflow: hidden;
+				font-family: Monospace;
+				font-size: 13px;
+				text-align: center;
+				color: #fff;
+			}
+
+			a {
+				color:#80CBC4;
+			}
+
+			#info {
+				position: absolute;
+				padding-top: 10px;
+				width: 100%;
+			}
+		</style>
+	</head>
+	<body>
+
+		<div id="info">
+			<a href="http://threejs.org" target="_blank" rel="noopener">three.js</a> - Per Object Motion Blur by <a href="http://gkjohnson.github.io" target="_blank" rel="noopener">Garrett Johnson</a>
+			</br>
+			Using a technique similar to the one described <a href="http://john-chapman-graphics.blogspot.com/2013/01/per-object-motion-blur.html">here</a>.
+			</br>
+			A velocity buffer is rendered using the previous and current frame positions for each object </br> which is then used to smear the final frame.
+		</div>
+
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../build/three.module.js",
+					"three/addons/": "./jsm/"
+				}
+			}
+		</script>
+
+		<script type="module">
+
+			import * as THREE from 'three';
+			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+			import { FXAAShader } from 'three/addons/shaders/FXAAShader.js';
+			import { GammaCorrectionShader } from 'three/addons/shaders/GammaCorrectionShader.js';
+			import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+			import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+			import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+			import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+			import { MotionBlurPass } from 'three/addons/postprocessing/MotionBlurPass.js';
+
+			// globals
+			const params = {
+				enabled: true,
+				cameraBlur: true,
+				animate: true,
+				samples: 15,
+				expandGeometry: 0,
+				interpolateGeometry: 1,
+				smearIntensity: 1,
+				speed: 20,
+				renderTargetScale: 1
+			};
+			let camera, scene, renderer, controls;
+			let composer;
+			let fxaaPass, gammaPass, motionPass, renderPass;
+			let torusMesh1, torusMesh2, torusMesh3;
+			let model;
+
+			let mixer, clock, animTime = 0;
+
+			// flag indicating that we've animated on frame past the
+			// point that we stopped animation
+			let animatedOneFramePast = false;
+
+			init();
+
+			function init() {
+
+				// initialize renderer, scene, camera
+				camera = new THREE.PerspectiveCamera( 40, window.innerWidth / window.innerHeight, 1, 2000 );
+				camera.position.set( 0.0, 5, 5 * 3.5 );
+
+				scene = new THREE.Scene();
+				scene.background = new THREE.Color( 0xE91E63 );
+
+				renderer = new THREE.WebGLRenderer();
+				renderer.setPixelRatio( window.devicePixelRatio );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				renderer.setAnimationLoop( animate );
+				renderer.shadowMap.enabled = true;
+				document.body.appendChild( renderer.domElement );
+
+				// geometry
+				var standardMaterial = new THREE.MeshStandardMaterial( {
+					map: null,
+					color: 0xffffff,
+					metalness: 0.5,
+				} );
+
+				var textureLoader = new THREE.TextureLoader();
+				textureLoader.load( 'https://rawgit.com/mrdoob/three.js/r94/examples/textures/floors/FloorsCheckerboard_S_Diffuse.jpg', function ( map ) {
+
+					map.wrapS = THREE.RepeatWrapping;
+					map.wrapT = THREE.RepeatWrapping;
+					map.anisotropy = 4;
+					map.repeat.set( 14, 2 );
+					standardMaterial.roughnessMap = map;
+					standardMaterial.map = map;
+					standardMaterial.needsUpdate = true;
+
+				} );
+
+				textureLoader.load( 'https://rawgit.com/mrdoob/three.js/r94/examples/textures/floors/FloorsCheckerboard_S_Normal.jpg', function ( map ) {
+
+					map.wrapS = THREE.RepeatWrapping;
+					map.wrapT = THREE.RepeatWrapping;
+					map.anisotropy = 4;
+					map.repeat.set( 14, 2 );
+					standardMaterial.normalMap = map;
+					standardMaterial.needsUpdate = true;
+
+				} );
+
+				var geometry = new THREE.TorusKnotGeometry( 2.5, 1, 150, 40 );
+				torusMesh1 = new THREE.Mesh( geometry, standardMaterial );
+				torusMesh1.position.set( - 6, 0, 6 );
+				torusMesh1.scale.multiplyScalar( 0.5 );
+				torusMesh1.castShadow = true;
+				torusMesh1.receiveShadow = true;
+				scene.add( torusMesh1 );
+
+				torusMesh2 = torusMesh1.clone();
+				torusMesh2.position.set( 6, 0, 6 );
+				scene.add( torusMesh2 );
+
+				torusMesh3 = torusMesh1.clone();
+				torusMesh3.position.set( 0, 0, - 7.5 );
+				scene.add( torusMesh3 );
+
+				// load samba dancer
+				const loader = new GLTFLoader();
+				loader.load( 'models/gltf/Michelle.glb', function ( gltf ) {
+
+					model = gltf.scene;
+					model.children[ 0 ].children[ 0 ].castShadow = true;
+					model.scale.setScalar( 4.5, 4.5, 4.5 );
+
+					model.position.set( 0, - 5, 0 );
+
+					mixer = new THREE.AnimationMixer( model );
+
+					const action = mixer.clipAction( gltf.animations[ 0 ] );
+					action.play();
+
+					scene.add( model );
+
+				} );
+
+
+				clock = new THREE.Clock();
+
+				// Lights
+				scene.add( new THREE.HemisphereLight( 0xE91E63, 0x552233, 1.0 ) );
+
+				var directionalLight = new THREE.DirectionalLight( 0xffffff, 4 );
+				//directionalLight.position.set( 50, 100, 50 );
+				directionalLight.castShadow = true;
+
+				var shadowCam = directionalLight.shadow.camera;
+				shadowCam.left = shadowCam.bottom = - 15;
+				shadowCam.right = shadowCam.top = 15;
+				directionalLight.shadow.mapSize.width = 1024;
+				directionalLight.shadow.mapSize.height = 1024;
+				scene.add( directionalLight );
+
+				// Shadow
+				var plane = new THREE.Mesh( new THREE.PlaneGeometry(), new THREE.ShadowMaterial( { side: THREE.DoubleSide, transparent: true, opacity: 0.5 } ) );
+				plane.receiveShadow = true;
+				plane.rotation.set( - Math.PI / 2, 0, 0 );
+				plane.scale.multiplyScalar( 30 );
+				plane.position.y = - 5;
+				scene.add( plane );
+
+				// Render Pass Setup
+				renderPass = new RenderPass( scene, camera );
+
+				fxaaPass = new ShaderPass( FXAAShader );
+				fxaaPass.uniforms[ 'resolution' ].value.set( 1 / window.innerWidth, 1 / window.innerHeight );
+
+				gammaPass = new ShaderPass( GammaCorrectionShader );
+
+				motionPass = new MotionBlurPass( scene, camera );
+
+				composer = new EffectComposer( renderer );
+				composer.setSize( window.innerWidth, window.innerHeight );
+				composer.setPixelRatio( window.devicePixelRatio );
+				composer.addPass( renderPass );
+				composer.addPass( motionPass );
+				composer.addPass( fxaaPass );
+				composer.addPass( gammaPass );
+
+				// camera controls
+				controls = new OrbitControls( camera, renderer.domElement );
+				controls.minDistance = 5;
+				controls.maxDistance = 200;
+
+				window.addEventListener( 'resize', onWindowResize, false );
+
+				// dat gui
+				var gui = new GUI();
+				gui.width = 300;
+
+				var motionFolder = gui.addFolder( 'motion blur' );
+				motionFolder.add( params, 'enabled' );
+				motionFolder.add( params, 'cameraBlur' );
+				motionFolder.add( params, 'samples', 0, 50 );
+				motionFolder.add( params, 'smearIntensity', 0, 4 );
+				motionFolder.add( params, 'expandGeometry', 0, 1 );
+				motionFolder.add( params, 'interpolateGeometry', 0, 1 );
+				motionFolder.add( params, 'renderTargetScale', 0, 1 )
+					.onChange( v => {
+
+						motionPass.renderTargetScale = v;
+						onWindowResize();
+
+					} );
+
+				motionFolder.add( motionPass.debug, 'display', {
+					'Motion Blur': MotionBlurPass.DEFAULT,
+					'Velocity': MotionBlurPass.VELOCITY,
+					'Geometry': MotionBlurPass.GEOMETRY
+				} ).onChange( val => motionPass.debug.display = parseFloat( val ) );
+				motionFolder.open();
+
+				var animFolder = gui.addFolder( 'animation' );
+				animFolder.add( params, 'animate' );
+				animFolder.add( params, 'speed', 0, 50 );
+				animFolder.open();
+
+				gui.open();
+
+			}
+
+			function onWindowResize() {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+			
+				composer.setSize( window.innerWidth, window.innerHeight );
+				const pixelRatio = renderer.getPixelRatio();
+				composer.setPixelRatio( pixelRatio );
+				fxaaPass.material[ 'resolution' ].value.x.set( 1 / ( window.innerWidth * pixelRatio ) );
+				fxaaPass.material[ 'resolution' ].value.y.set( 1 / ( window.innerHeight * pixelRatio ) );
+
+			}
+
+			function animate() {
+
+				// set the variables
+				motionPass.enabled = params.enabled;
+				//console.log( motionPass );
+				motionPass.samples = params.samples;
+				motionPass.expandGeometry = params.expandGeometry;
+				motionPass.interpolateGeometry = params.interpolateGeometry;
+				motionPass.renderCameraBlur = params.cameraBlur;
+				motionPass.smearIntensity = params.smearIntensity;
+
+				camera.lookAt( scene.position );
+
+				const deltaTime = clock.getDelta();
+				motionPass.debug.dontUpdateState = ! params.animate;
+
+				if ( params.animate || animatedOneFramePast === false ) {
+
+					animTime += deltaTime * params.speed;
+					if ( mixer !== undefined ) {
+
+						mixer.update( deltaTime * params.speed / 20 );
+
+					}
+
+					torusMesh1.rotation.y += 0.01 * params.speed;
+					torusMesh2.position.y = Math.sin( animTime ) * 2;
+					torusMesh3.scale.set( 1, 1, 1 ).multiplyScalar( 0.25 + ( 1 + Math.sin( animTime ) ) * 0.4 );
+
+					animatedOneFramePast = ! params.animate;
+
+				} else if ( params.animate ) {
+
+					animatedOneFramePast = false;
+
+				}
+
+				composer.render();
+			
+			}
+
+
+		</script>
+
+	</body>
+
+</html>
