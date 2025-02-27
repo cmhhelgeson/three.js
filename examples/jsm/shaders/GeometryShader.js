@@ -8,7 +8,6 @@ export const GeometryShader = {
 		prevBoneTexture: { value: null },
 		expandGeometry: { value: 0 }, interpolateGeometry: { value: 1 },
 		smearIntensity: { value: 1 }
-
 	},
 
 	vertexShader:

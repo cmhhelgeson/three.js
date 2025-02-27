@@ -205,6 +205,8 @@ export class MotionBlurPass extends Pass {
 		this._compositeMaterial = new ShaderMaterial( CompositeShader );
 		this._compositeQuad = new FullScreenQuad( this._compositeMaterial );
 
+		this.fsQuad = new FullScreenQuad();
+
 	}
 
 	// Pass API
@@ -275,23 +277,21 @@ export class MotionBlurPass extends Pass {
 				renderer.clear();
 				this._drawAllMeshes( renderer, MotionBlurPass.VELOCITY, ! debug.dontUpdateState );
 
-				const compositeMaterial = this._compositeMaterial;
-				const uniforms = compositeMaterial.uniforms;
-				uniforms.sourceBuffer.value = readBuffer.texture;
-				uniforms.velocityBuffer.value = this._velocityBuffer.texture;
-				uniforms.jitter.value = this.jitter;
+				this._compositeMaterial.uniforms[ 'sourceBuffer' ].value = readBuffer.texture;
+				this._compositeMaterial.uniforms[ 'velocityBuffer' ].value = this._velocityBuffer.texture;
+				this._compositeMaterial.uniforms[ 'jitter' ].value = this.jitter;
 
-				if ( compositeMaterial.defines.SAMPLES !== this.samples ) {
+				if ( this._compositeMaterial.defines.SAMPLES !== this.samples ) {
 
-					compositeMaterial.defines.SAMPLES = Math.max( 0, Math.floor( this.samples ) );
-					compositeMaterial.needsUpdate = true;
+					this._compositeMaterial.defines.SAMPLES = Math.max( 0, Math.floor( this.samples ) );
+					this._compositeMaterial.needsUpdate = true;
 
 				}
 
-				if ( compositeMaterial.defines.JITTER_STRATEGY !== this.jitterStrategy ) {
+				if ( this._compositeMaterial.defines.JITTER_STRATEGY !== this.jitterStrategy ) {
 
-					compositeMaterial.defines.JITTER_STRATEGY = this.jitterStrategy;
-					compositeMaterial.needsUpdate = true;
+					this._compositeMaterial.defines.JITTER_STRATEGY = this.jitterStrategy;
+					this._compositeMaterial.needsUpdate = true;
 
 				}
 
@@ -347,7 +347,10 @@ export class MotionBlurPass extends Pass {
 
 		}
 
-		const isSkinned = obj.type === 'SkinnedMesh' && obj.skeleton && obj.skeleton.bones && obj.skeleton.boneMatrices;
+
+		const isSkinned = Boolean( obj.type === 'SkinnedMesh' && obj.skeleton && obj.skeleton.bones && obj.skeleton.boneMatrices );
+		// Possibly being used in a shader, but seems like it's just being used as a boolean to set a define in the WebGLProgram?
+		//const isSkinned = obj.type === 'SkinnedMesh' && obj.skeleton && obj.skeleton.bones && obj.skeleton.boneMatrices;
 
 		data.geometryMaterial.skinning = isSkinned;
 		data.velocityMaterial.skinning = isSkinned;
@@ -355,6 +358,9 @@ export class MotionBlurPass extends Pass {
 		// copy the skeleton state into the prevBoneTexture uniform
 		const skeleton = obj.skeleton;
 		const boneTextureNeedsUpdate = data.boneMatrices === null || data.boneMatrices.length !== skeleton.boneMatrices.length;
+
+		// If the mesh is skinned and if a boneTexture has yet to be assigned,
+		// Assign current boneTexture to previous frame. Then just swap them between frames
 		if ( isSkinned && boneTextureNeedsUpdate ) {
 
 			const boneMatrices = new Float32Array( skeleton.boneMatrices.length );
@@ -464,15 +470,14 @@ export class MotionBlurPass extends Pass {
 			const data = this._getPreviousFrameState( mesh );
 
 			const material = type === MotionBlurPass.GEOMETRY ? data.geometryMaterial : data.velocityMaterial;
-			const uniforms = material.uniforms;
-			uniforms.expandGeometry.value = expandGeometry;
-			uniforms.interpolateGeometry.value = interpolateGeometry;
-			uniforms.smearIntensity.value = smearIntensity;
-
 			const projMat = renderCameraBlur ? this._prevCamProjection : camera.projectionMatrix;
 			const invMat = renderCameraBlur ? this._prevCamWorldInverse : camera.matrixWorldInverse;
-			uniforms.prevProjectionMatrix.value.copy( projMat );
-			uniforms.prevModelViewMatrix.value.multiplyMatrices( invMat, data.matrixWorld );
+
+			material.uniforms[ 'expandGeometry' ].value = expandGeometry;
+			material.uniforms[ 'interpolateGeometry' ].value = interpolateGeometry;
+			material.uniforms[ 'smearIntensity' ].value = smearIntensity;
+			material.uniforms[ 'prevProjectionMatrix' ].value.copy( projMat );
+			material.uniforms[ 'prevModelViewMatrix' ].value.multiplyMatrices( invMat, data.matrixWorld );
 
 			renderer.renderBufferDirect( camera, null, mesh.geometry, material, mesh, null );
 

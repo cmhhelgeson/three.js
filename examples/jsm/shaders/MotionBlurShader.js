@@ -1,5 +1,45 @@
 import { Matrix4, ShaderChunk } from 'three';
 
+const velocity_vertex =
+	`
+		vec3 transformed;
+
+		// Get the normal
+		${ ShaderChunk.skinbase_vertex }
+		${ ShaderChunk.beginnormal_vertex }
+		${ ShaderChunk.skinnormal_vertex }
+		${ ShaderChunk.defaultnormal_vertex }
+
+		// Get the current vertex position
+		transformed = vec3( position );
+		${ ShaderChunk.skinning_vertex }
+		newPosition = modelViewMatrix * vec4(transformed, 1.0);
+
+		// Get the previous vertex position
+		transformed = vec3( position );
+		${ ShaderChunk.skinbase_vertex.replace( /mat4 /g, '' ).replace( /getBoneMatrix/g, 'getPrevBoneMatrix' ) }
+		${ ShaderChunk.skinning_vertex.replace( /vec4 /g, '' ) }
+		prevPosition = prevModelViewMatrix * vec4(transformed, 1.0);
+
+		// The delta between frames
+		vec3 delta = newPosition.xyz - prevPosition.xyz;
+		vec3 direction = normalize(delta);
+
+		// Stretch along the velocity axes
+		// TODO: Can we combine the stretch and expand
+		float stretchDot = dot(direction, transformedNormal);
+		vec4 expandDir = vec4(direction, 0.0) * stretchDot * expandGeometry * length(delta);
+		vec4 newPosition2 =  projectionMatrix * (newPosition + expandDir);
+		vec4 prevPosition2 = prevProjectionMatrix * (prevPosition + expandDir);
+
+		newPosition =  projectionMatrix * newPosition;
+		prevPosition = prevProjectionMatrix * prevPosition;
+
+		gl_Position = mix(newPosition2, prevPosition2, interpolateGeometry * (1.0 - step(0.0, stretchDot) ) );
+
+	`;
+
+
 export const MotionBlurShader = {
 
 	name: 'MotionBlurShader',
@@ -19,49 +59,23 @@ export const MotionBlurShader = {
 			${ ShaderChunk.skinning_pars_vertex }
 			${ ShaderChunk.prev_skinning_pars_vertex }
 
+			// MVP matrices of the previous frame
 			uniform mat4 prevProjectionMatrix;
 			uniform mat4 prevModelViewMatrix;
+
+			// Expand the base shape of the geometry
 			uniform float expandGeometry;
+
+			// Stretch the geometry along the mesh's motion vector
 			uniform float interpolateGeometry;
+			
+			// Vertex positions of the current and previous frames
 			varying vec4 prevPosition;
 			varying vec4 newPosition;
 
 			void main() {
 
-				vec3 transformed;
-
-				// Get the normal
-				${ ShaderChunk.skinbase_vertex }
-				${ ShaderChunk.beginnormal_vertex }
-				${ ShaderChunk.skinnormal_vertex }
-				${ ShaderChunk.defaultnormal_vertex }
-
-				// Get the current vertex position
-				transformed = vec3( position );
-				${ ShaderChunk.skinning_vertex }
-				newPosition = modelViewMatrix * vec4(transformed, 1.0);
-
-				// Get the previous vertex position
-				transformed = vec3( position );
-				${ ShaderChunk.skinbase_vertex.replace( /mat4 /g, '' ).replace( /getBoneMatrix/g, 'getPrevBoneMatrix' ) }
-				${ ShaderChunk.skinning_vertex.replace( /vec4 /g, '' ) }
-				prevPosition = prevModelViewMatrix * vec4(transformed, 1.0);
-
-				// The delta between frames
-				vec3 delta = newPosition.xyz - prevPosition.xyz;
-				vec3 direction = normalize(delta);
-
-				// Stretch along the velocity axes
-				// TODO: Can we combine the stretch and expand
-				float stretchDot = dot(direction, transformedNormal);
-				vec4 expandDir = vec4(direction, 0.0) * stretchDot * expandGeometry * length(delta);
-				vec4 newPosition2 =  projectionMatrix * (newPosition + expandDir);
-				vec4 prevPosition2 = prevProjectionMatrix * (prevPosition + expandDir);
-
-				newPosition =  projectionMatrix * newPosition;
-				prevPosition = prevProjectionMatrix * prevPosition;
-
-				gl_Position = mix(newPosition2, prevPosition2, interpolateGeometry * (1.0 - step(0.0, stretchDot) ) );
+				${velocity_vertex}
 
 			}
 		`,
@@ -73,7 +87,7 @@ export const MotionBlurShader = {
 
 			void main() {
 
-				// NOTE: It seems the velociyt is incorrectly calculated here -- see the velocity pass
+				// NOTE: It seems the velocity is incorrectly calculated here -- see the velocity pass
 				// in shader replacement to see how to compute velocities in screen uv space.
 				vec3 vel;
 				vel = (newPosition.xyz / newPosition.w) - (prevPosition.xyz / prevPosition.w);

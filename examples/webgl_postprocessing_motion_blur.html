@@ -258,12 +258,12 @@
 				camera.updateProjectionMatrix();
 
 				renderer.setSize( window.innerWidth, window.innerHeight );
-			
+
 				composer.setSize( window.innerWidth, window.innerHeight );
 				const pixelRatio = renderer.getPixelRatio();
 				composer.setPixelRatio( pixelRatio );
-				fxaaPass.material[ 'resolution' ].value.x.set( 1 / ( window.innerWidth * pixelRatio ) );
-				fxaaPass.material[ 'resolution' ].value.y.set( 1 / ( window.innerHeight * pixelRatio ) );
+				fxaaPass.material.uniforms[ 'resolution' ].value.x = 1 / ( window.innerWidth * pixelRatio );
+				fxaaPass.material.uniforms[ 'resolution' ].value.y = 1 / ( window.innerHeight * pixelRatio );
 
 			}
 
