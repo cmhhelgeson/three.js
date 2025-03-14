@@ -27,7 +27,7 @@
 			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
 			import Stats from 'three/addons/libs/stats.module.js';
 
-			import { uniform, attributeArray, output, transformedNormalView, metalness } from 'three/tsl';
+			import { uniform, Loop, uint, negate, deltaTime, Continue, attributeArray, dot, Fn, If, instanceIndex, float, output, select, transformedNormalView, metalness } from 'three/tsl';
 
 			const tempVectorA = new THREE.Vector3();
 			const tempVectorB = new THREE.Vector3();
@@ -135,7 +135,7 @@
 			let renderer;
 			let camera;
 			let cameraControl;
-			let gui;
+			//let gui;
 			let stats;
 			var gGrabber;
 			var gMouseDown = false;
@@ -160,6 +160,7 @@
 				substeps: 10,
 				paused: true,
 				objects: [],
+				useGPU: true,
 				// Functions
 				restart: () => {
 
@@ -170,7 +171,7 @@
 
 					for ( var i = 0; i < gPhysicsScene.objects.length; i ++ ) {
 
-						gPhysicsScene.objects[ i ].squash();
+						gPhysicsScene.objects[ i ].squash( renderer );
 
 					}
 
@@ -201,9 +202,12 @@
 					// Velocity
 					this.vel = new Float32Array( 3 * this.numParticles );
 					this.velStorage = attributeArray( this.vel, 'vec3' );
-
-					this.tetIds = tetMesh.tetIds;
-					this.edgeIds = tetMesh.tetEdgeIds;
+					// Tetrahedron vertex indices
+					this.tetIds = new Uint32Array( tetMesh.tetIds );
+					this.tetIDStorage = attributeArray( this.tetIDs, 'uint' );
+					// Edge vertex indices
+					this.edgeIds = new Uint32Array( tetMesh.tetEdgeIds );
+					this.edgeIDStorage = new Uint32Array( tetMesh.edgeIds, 'uint' );
 					// Rest volume
 					this.restVol = new Float32Array( this.numTets );
 					this.restVolStorage = attributeArray( this.restVol, 'float' );
@@ -238,7 +242,153 @@
 					this.surfaceMesh.layers.enable( 1 );
 					scene.add( this.surfaceMesh );
 
-					this.volIdOrder = [[ 1, 3, 2 ], [ 0, 2, 3 ], [ 0, 3, 1 ], [ 0, 1, 2 ]];
+					this.volIdOrder = [
+						[ 1, 3, 2 ],
+						[ 0, 2, 3 ],
+						[ 0, 3, 1 ],
+						[ 0, 1, 2 ]
+					];
+
+					this.volIdOrderArray = new Uint32Array( [
+						1, 3, 2,
+						0, 2, 3,
+						0, 3, 1,
+						0, 1, 2
+					] );
+
+					this.volIDOrderStorage = attributeArray(
+						this.volIDOrderArray,
+						'uvec3'
+					);
+
+					// Compute Functions
+					this.computePreSolve = Fn( () => {
+
+						const { gravity } = effectController;
+
+						If( this.invMassStorage.element( instanceIndex ).equal( 0.0 ), () => {
+
+							Continue();
+
+						} );
+
+						this.velStorage.element( instanceIndex ).addAssign( gravity.mul( deltaTime ) );
+						this.prevPosStorage.element( instanceIndex ).assign( this.posStorage.element( instanceIndex ) );
+						this.posStorage.element( instanceIndex ).addAssign( this.velStorage.element( instanceIndex ).mul( deltaTime ) );
+			
+						If( this.posStorage.element( instanceIndex ).y.lessThan( 0.0 ), () => {
+
+							this.posStorage.element( instanceIndex ).assign( this.prevPosStorage.element( instanceIndex ) );
+							this.posStorage.element( instanceIndex ).y.assign( 0.0 );
+
+						} );
+
+			
+					} )().compute( this.numParticles );
+
+					this.computePostSolve = Fn( () => {
+
+						If( this.invMassStorage.element( instanceIndex ).equal( 0.0 ), () => {
+
+							Continue();
+			
+						} );
+
+						const velocity = this.velStorage.element( instanceIndex );
+						const currentPos = this.posStorage.element( instanceIndex );
+						const prevPos = this.prevPosStorage.element( instanceIndex );
+						velocity.assign( currentPos.sub( prevPos ) );
+
+					} )().compute( this.numParticles );
+
+					this.computeSolveEdges = Fn( () => {
+
+						const { edgeCompliance } = effectController;
+
+						const alpha = edgeCompliance.div( deltaTime ).div( deltaTime );
+
+						const id0 = this.edgeIDStorage.element( instanceIndex.mul( 2 ) );
+						const id1 = this.edgeIDStorage.element( instanceIndex.mul( 2 ).add( 1 ) );
+
+						const w0 = this.invMassStorage.element( id0 );
+						const w1 = this.invMassStorage.element( id1 );
+
+						const w = w0.add( w1 );
+
+						If( w.equal( 0.0 ), () => {
+
+							Continue();
+
+						} );
+
+						const distance = this.posStorage.element( id0 ).sub( this.posStorage.element( id1 ) );
+						const vecLength = length( distance );
+
+						If( vecLength.equal( 0.0 ), () => {
+
+							Continue();
+
+						} );
+
+						const scaledDistance = distance.mul( float( 1.0 ).div( vecLength ) );
+
+						const restLen = this.edgeLengthsStorage( instanceIndex );
+						const C = vecLength.sub( restLen );
+						const s = negate( C ).div( w.add( alpha ) );
+						this.posStorage.element( id0 ).addAssign( scaledDistance.mul( s.mul( w0 ) ) );
+						this.posStorage.element( id1 ).addAssign( scaledDistance.mul( negate( s ).mul( w1 ) ) );
+
+			
+					} )().compute( this.edgeLengths.length );
+
+					this.computeSolveVolumes = Fn( () => {
+
+						const { volumeCompliance } = effectController;
+
+						const alpha = volumeCompliance.div( deltaTime ).div( deltaTime );
+
+						const w = float( 0.0 ).toVar();
+
+						Loop( { start: uint( 0 ), end: uint( 4 ) }, ( { i } ) => {
+
+							const volumeIDs = this.volIDOrderStorage.element( i );
+
+							const offset = instanceIndex.mul( 4 );
+
+							const id0 = this.tetIDStorage.element( offset.add( volumeIDs.x ) );
+							const id1 = this.tetIDStorage.element( offset.add( volumeIDs.y ) );
+							const id2 = this.tetIDStorage.element( offset.add( volumeIDs.z ) );
+
+							//vecSetDiff( this.temp, 0, this.pos, id1, this.pos, id0 );
+							//vecSetDiff( this.temp, 1, this.pos, id2, this.pos, id0 );
+							//vecSetCross( this.grads, j, this.temp, 0, this.temp, 1 );
+							//vecScale( this.grads, j, 1.0 / 6.0 );
+
+							//w += this.invMass[ this.tetIds[ 4 * i + j ] ] * vecLengthSquared( this.grads, j );
+							//w.addAssign()
+			
+						} );
+
+						If( w.equal( 0.0 ), () => {
+
+							Continue();
+
+						} );
+
+						const volume = this.getTetVolumeGPU();
+						const restVolume = this.restVolStorage.element( instanceIndex );
+						const C = volume.sub( restVolume );
+						const s = negate( C );
+
+			
+					} )().compute( this.numTets );
+
+					this.computeSquash = Fn( () => {
+
+						this.posStorage.element( instanceIndex ).y.assign( 0.5 );
+
+					} )().compute( this.numParticles );
+
 			
 				}
 
@@ -261,6 +411,42 @@
 			
 				}
 
+				getTetVolumeGPU( startIndex ) {
+
+					const CalculateTetVolume = Fn( ( [ val0, val1, val2, val3 ] ) => {
+
+						const distZero = val1.sub( val0 );
+						const distOne = val2.sub( val0 );
+						const distTwo = val3.sub( val0 );
+
+						const cross = distZero.cross( distOne );
+						return ( dot( cross, distTwo ) ).div( 6.0 );
+
+					} ).setLayout( {
+						name: 'CalculateTetVolume',
+						type: 'float',
+						inputs: [
+							{ name: 'val0', type: 'vec3' },
+							{ name: 'val1', type: 'vec3' },
+							{ name: 'val2', type: 'vec3' },
+							{ name: 'val3', type: 'vec3' },
+						]
+					} );
+
+					const id0 = this.tetIDStorage.element( startIndex.mul( 4 ) );
+					const id1 = this.tetIDStorage.element( startIndex.mul( 4 ).add( 1 ) );
+					const id2 = this.tetIDStorage.element( startIndex.mul( 4 ).add( 2 ) );
+					const id3 = this.tetIDStorage.elemtn( startIndex.mul( 4 ).add( 3 ) );
+
+					const val0 = this.posStorage.element( id0 );
+					const val1 = this.posStorage.element( id1 );
+					const val2 = this.posStorage.element( id2 );
+					const val3 = this.posStorage.element( id3 );
+
+					return CalculateTetVolume( val0, val1, val2, val3 );
+			
+				}
+
 				getTetVolume( nr ) {
 
 					var id0 = this.tetIds[ 4 * nr ];
@@ -279,6 +465,40 @@
 
 					this.invMass.fill( 0.0 );
 					this.restVol.fill( 0.0 );
+
+					const computeInitTetVolume = Fn( () => {
+
+						const vol = this.getTetVolumeGPU( instanceIndex );
+						this.restVolStorage.element( instanceIndex ).assign( vol );
+
+						const pInvMass = select(
+							vol.greaterThan( 0.0 ),
+							float( 1.0 ).div( vol.div( 4.0 ) ),
+							float( 0.0 )
+						);
+
+						this.invMassStorage.element( instanceIndex.mul( 4 ) ).addAssign( pInvMass );
+						this.invMassStorage.element( instanceIndex.mul( 4 ).add( 1 ) ).addAssign( pInvMass );
+						this.invMassStorage.element( instanceIndex.mul( 4 ).add( 2 ) ).addAssign( pInvMass );
+						this.invMassStorage.element( instanceIndex.mul( 4 ).add( 3 ) ).addAssign( pInvMass );
+			
+					} )().compute( this.numTets );
+
+					const computeInitEdgeLength = Fn( () => {
+
+						const id0 = this.edgeIDStorage( instanceIndex.mul( 2 ) );
+						const id1 = this.edgeIDStorage( instanceIndex.mul( 2 ).add( 1 ) );
+
+						const pos0 = this.postStorage.element( id0 );
+						const pos1 = this.posStorage.element( id1 );
+			
+						const dist = pos0.sub( pos1 );
+			
+						const edgeLength = length( dist );
+						this.edgeLengthsStorage.element( instanceIndex ).assign( edgeLength );
+
+
+					} )().compute( this.edgeLengths.length );
 
 					for ( var i = 0; i < this.numTets; i ++ ) {
 
@@ -306,8 +526,12 @@
 
 					for ( var i = 0; i < this.numParticles; i ++ ) {
 
-						if ( this.invMass[ i ] == 0.0 )
+						if ( this.invMass[ i ] == 0.0 ) {
+
 							continue;
+			
+						}
+
 						vecAdd( this.vel, i, gravity, 0, dt );
 						vecCopy( this.prevPos, i, this.pos, i );
 						vecAdd( this.pos, i, this.vel, i, dt );
@@ -359,8 +583,11 @@
 						var w0 = this.invMass[ id0 ];
 						var w1 = this.invMass[ id1 ];
 						var w = w0 + w1;
-						if ( w == 0.0 )
+						if ( w == 0.0 ) {
+
 							continue;
+			
+						}
 
 						vecSetDiff( this.grads, 0, this.pos, id0, this.pos, id1 );
 						var len = Math.sqrt( vecLengthSquared( this.grads, 0 ) );
@@ -422,12 +649,20 @@
 			
 				}
 
-				squash() {
+				squash( renderer ) {
 
-					for ( var i = 0; i < this.numParticles; i ++ ) {
+					if ( effectController.useGPU ) {
 
-						this.pos[ 3 * i + 1 ] = 0.5;
+						renderer.compute( this.computeSquash );
+
+					} else {
+
+						for ( var i = 0; i < this.numParticles; i ++ ) {
+
+							this.pos[ 3 * i + 1 ] = 0.5;
 			
+						}
+
 					}
 
 					this.updateMeshes();
@@ -494,6 +729,40 @@
 				var body = new SoftBody( bunnyMesh, scene );
 				gPhysicsScene.objects.push( body );
 				//document.getElementById( 'numTets' ).innerHTML = body.numTets;
+			
+			};
+
+			const simulateGPU = ( renderer ) => {
+
+				if ( gPhysicsScene.paused ) {
+
+					return;
+			
+				}
+
+				for ( const object of gPhysicsScene.objects ) {
+
+					const sdt = gPhysicsScene.dt / gPhysicsScene.numSubsteps;
+
+					renderer.compute( object.computePreSolve );
+
+				}
+
+				for ( const object of gPhysicsScene.objects ) {
+
+					const sdt = gPhysicsScene.dt / gPhysicsScene.numSubsteps;
+
+					renderer.compute( object.computeSolveEdges );
+					renderer.compute( object.computeSolveVolumes );
+
+				}
+
+				for ( const object of gPhysicsScene.objects ) {
+
+					renderer.compute( object.computePostSolve );
+			
+			}
+
 			
 			};
 
@@ -610,14 +879,15 @@
 				cameraControl.zoomSpeed = 2.0;
     		cameraControl.panSpeed = 0.4;
 
-				gui = new GUI();
+				const gui = new GUI();
 
 				const simSettingsFolder = gui.addFolder( 'Settings' );
 				//simSettingsFolder.add( effectController, 'paused' );
-				simSettingsFolder.add( effectController.gravity, 'value', 1, 20 ).step( 0.01 ).name( 'Gravity' );
-				simSettingsFolder.add( effectController.volumeCompliance, 'value', 0, 200 ).step( 1 ).name( 'Volume Compliance' );
-				simSettingsFolder.add( effectController.edgeCompliance, 'value', 0, 200 ).step( 1 ).name( 'Edge Compliance' );
-				simSettingsFolder.add( effectController, 'substeps', 1, 50 ).step( 1 );
+				simSettingsFolder.add( effectController, 'useGPU' );
+				simSettingsFolder.add( effectController.gravity, 'value', - 20.0, 20.0 ).name( 'Gravity' );
+				//simSettingsFolder.add( effectController.volumeCompliance, 'value', 0, 200 ).step( 1 ).name( 'Volume Compliance' );
+				//simSettingsFolder.add( effectController.edgeCompliance, 'value', 0, 200 ).step( 1 ).name( 'Edge Compliance' );
+				//simSettingsFolder.add( effectController, 'substeps', 1, 50 ).step( 1 );
 				const functionsFolder = gui.addFolder( 'Functions' );
 				functionsFolder.add( effectController, 'restart' );
 				functionsFolder.add( effectController, 'squash' );
