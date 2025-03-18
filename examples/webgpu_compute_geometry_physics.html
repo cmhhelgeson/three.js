@@ -27,21 +27,12 @@
 			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
 			import Stats from 'three/addons/libs/stats.module.js';
 
-			import { uniform, Loop, uint, negate, deltaTime, Continue, attributeArray, dot, Fn, If, instanceIndex, float, output, select, transformedNormalView, metalness } from 'three/tsl';
+			import { uniform, Loop, uint, negate, deltaTime, storage, Continue, attributeArray, dot, Fn, If, instanceIndex, float, output, select, transformedNormalView, metalness } from 'three/tsl';
 
 			const tempVectorA = new THREE.Vector3();
 			const tempVectorB = new THREE.Vector3();
 
-
 			// ----- math on vector arrays -------------------------------------------------------------
-
-			const vecSetZero = ( array, elementIndex ) => {
-
-				const absoluteIndex = elementIndex * 3;
-				tempVectorA.set( 0.0, 0.0, 0.0 );
-				tempVectorA.toArray( array, absoluteIndex );
-
-			};
 
 			const vecScale = ( array, elementIndex, scale ) => {
 
@@ -167,11 +158,16 @@
 					location.reload();
 			
 				},
+				'Simulate Step': () => {
+
+					simulate();
+
+				},
 				squash: () => {
 
-					for ( var i = 0; i < gPhysicsScene.objects.length; i ++ ) {
+					for ( var i = 0; i < effectController.objects.length; i ++ ) {
 
-						gPhysicsScene.objects[ i ].squash( renderer );
+						effectController.objects[ i ].squash( renderer );
 
 					}
 
@@ -195,7 +191,7 @@
 					this.numTets = tetMesh.tetIds.length / 4;
 					// Position
 					this.pos = new Float32Array( tetMesh.verts );
-					this.posStorage = attributeArray( tetMesh.verts, 'vec3' );
+					this.posStorage = attributeArray( this.pos, 'vec3' );
 					// Prev Position
 					this.prevPos = tetMesh.verts.slice();
 					this.prevPosStorage = attributeArray( this.prevPos, 'vec3' );
@@ -231,10 +227,11 @@
 
 					// surface tri mesh
 
-					var geometry = new THREE.BufferGeometry();
+					const geometry = new THREE.BufferGeometry();
 					geometry.setAttribute( 'position', new THREE.BufferAttribute( this.pos, 3 ) );
 					geometry.setIndex( tetMesh.tetSurfaceTriIds );
-					var material = new THREE.MeshPhongMaterial( { color: 0xF02000 } );
+			
+					const material = new THREE.MeshPhongMaterial( { color: 0xF02000 } );
 					material.flatShading = true;
 					this.surfaceMesh = new THREE.Mesh( geometry, material );
 					this.surfaceMesh.geometry.computeVertexNormals();
@@ -653,7 +650,9 @@
 
 					if ( effectController.useGPU ) {
 
-						renderer.compute( this.computeSquash );
+						console.log( 'GPU Squash' );
+
+						//renderer.compute( this.computeSquash );
 
 					} else {
 
@@ -727,7 +726,7 @@
 			const initPhysics = () => {
 
 				var body = new SoftBody( bunnyMesh, scene );
-				gPhysicsScene.objects.push( body );
+				effectController.objects.push( body );
 				//document.getElementById( 'numTets' ).innerHTML = body.numTets;
 			
 			};
@@ -740,7 +739,7 @@
 			
 				}
 
-				for ( const object of gPhysicsScene.objects ) {
+				for ( const object of effectController.objects ) {
 
 					const sdt = gPhysicsScene.dt / gPhysicsScene.numSubsteps;
 
@@ -748,7 +747,7 @@
 
 				}
 
-				for ( const object of gPhysicsScene.objects ) {
+				for ( const object of effectController.objects ) {
 
 					const sdt = gPhysicsScene.dt / gPhysicsScene.numSubsteps;
 
@@ -757,7 +756,7 @@
 
 				}
 
-				for ( const object of gPhysicsScene.objects ) {
+				for ( const object of effectController.objects ) {
 
 					renderer.compute( object.computePostSolve );
 			
@@ -776,21 +775,21 @@
 
 				for ( var step = 0; step < gPhysicsScene.numSubsteps; step ++ ) {
 
-					for ( var i = 0; i < gPhysicsScene.objects.length; i ++ ) {
+					for ( var i = 0; i < effectController.objects.length; i ++ ) {
 
-						gPhysicsScene.objects[ i ].preSolve( sdt, gPhysicsScene.gravity );
+						effectController.objects[ i ].preSolve( sdt, gPhysicsScene.gravity );
 			
 					}
 			
-					for ( var i = 0; i < gPhysicsScene.objects.length; i ++ ) {
+					for ( var i = 0; i < effectController.objects.length; i ++ ) {
 
-						gPhysicsScene.objects[ i ].solve( sdt );
+						effectController.objects[ i ].solve( sdt );
 
 					}
 
-					for ( var i = 0; i < gPhysicsScene.objects.length; i ++ ) {
+					for ( var i = 0; i < effectController.objects.length; i ++ ) {
 
-						gPhysicsScene.objects[ i ].postSolve( sdt );
+						effectController.objects[ i ].postSolve( sdt );
 
 					}
 
@@ -1045,9 +1044,9 @@
 
 			const changeCompliance = () => {
 
-				for ( var i = 0; i < gPhysicsScene.objects.length; i ++ ) {
+				for ( var i = 0; i < effectController.objects.length; i ++ ) {
 
-					gPhysicsScene.objects[ i ].edgeCompliance = this.value * 50.0;
+					effectController.objects[ i ].edgeCompliance = this.value * 50.0;
 
 				}
 			
@@ -1065,17 +1064,6 @@
 
 			function run() {
 
-				//var button = document.getElementById( 'buttonRun' );
-				/* if ( gPhysicsScene.paused ) {
-
-					button.innerHTML = 'Stop';
-			
-				} else {
-
-					button.innerHTML = 'Run';
-			
-				} */
-
 				gPhysicsScene.paused = ! gPhysicsScene.paused;
 			
 			}
@@ -1086,40 +1074,6 @@
 			
 			}
 
-			function squash() {
-
-				for ( var i = 0; i < gPhysicsScene.objects.length; i ++ ) {
-
-					gPhysicsScene.objects[ i ].squash();
-
-				}
-
-				if ( ! gPhysicsScene.paused ) {
-
-					run();
-			
-				}
-			
-			}
-
-			/* function newBody() {
-
-				body = new SoftBody( bunnyMesh, gThreeScene );
-				body.translate( - 1.0 + 2.0 * Math.random(), 0.0, - 1.0 + 2.0 * Math.random() );
-				gPhysicsScene.objects.push( body );
-			
-				var numTets = 0;
-				for ( var i = 0; i < gPhysicsScene.objects.length; i ++ ) {
-
-					numTets += gPhysicsScene.objects[ i ].numTets;
-
-				}
-			
-				document.getElementById( 'numTets' ).innerHTML = numTets;
-
-			
-			} */
-			
 			// make browser to call us repeatedly -----------------------------------
 
 			async function update() {
