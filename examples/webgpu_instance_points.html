@@ -40,7 +40,6 @@
 			let material;
 			let stats;
 			let gui;
-			let effectController;
 
 			// viewport
 			let insetWidth;
@@ -48,6 +47,16 @@
 
 			// compute
 			let computeSize;
+
+			const effectController = {
+
+				pulseSpeed: uniform( 6 ),
+				minWidth: uniform( 6 ),
+				maxWidth: uniform( 20 ),
+				alphaToCoverage: true,
+				dpr: 1,
+
+			};
 
 			init();
 
@@ -62,15 +71,6 @@
 				camera2.position.copy( camera.position );
 
 				backgroundNode = color( 0x222222 );
-
-				effectController = {
-
-					pulseSpeed: uniform( 6 ),
-					minWidth: uniform( 6 ),
-					maxWidth: uniform( 20 ),
-					alphaToCoverage: true
-
-				};
 
 				// Position and THREE.Color Data
 
@@ -175,6 +175,7 @@
 				gui.add( effectController.minWidth, 'value', 1, 30, 1 ).name( 'minWidth' );
 				gui.add( effectController.maxWidth, 'value', 2, 30, 1 ).name( 'maxWidth' );
 				gui.add( effectController.pulseSpeed, 'value', 1, 20, 0.1 ).name( 'pulseSpeed' );
+				gui.add( effectController, 'dpr', [ 0.1, 0.2, 0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0 ] );
 
 			}
 
@@ -210,6 +211,8 @@
 				renderer.autoClear = true;
 
 				scene.backgroundNode = null;
+			
+				renderer.setPixelRatio( effectController.dpr );
 
 				renderer.render( scene, camera );
 
