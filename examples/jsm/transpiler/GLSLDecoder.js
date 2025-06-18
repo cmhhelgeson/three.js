@@ -1,4 +1,4 @@
-import { Program, FunctionDeclaration, For, AccessorElements, Ternary, Varying, DynamicElement, StaticElement, FunctionParameter, Unary, Conditional, VariableDeclaration, Operator, Number, String, FunctionCall, Return, Accessor, Uniform, Discard } from './AST.js';
+import { Program, Struct, FunctionDeclaration, For, AccessorElements, Ternary, Varying, DynamicElement, StaticElement, FunctionParameter, Unary, Conditional, VariableDeclaration, Operator, Number, String, FunctionCall, Return, Accessor, Uniform, Discard } from './AST.js';
 
 const unaryOperators = [
 	'+', '-', '~', '!', '++', '--'
@@ -760,6 +760,17 @@ class GLSLDecoder {
 
 	}
 
+	parseStruct() {
+
+		this.readToken(); // skip 'struct'
+
+		const struct = new Struct( this.readToken() );
+
+
+
+
+	}
+
 	parseFor() {
 
 		this.readToken(); // skip 'for'
@@ -922,6 +933,10 @@ class GLSLDecoder {
 				} else if ( token.str === 'return' ) {
 
 					statement = this.parseReturn();
+
+				} else if ( token.str === 'struct' ) {
+
+					statement = this.parseStruct();
 
 				} else if ( token.str === 'if' ) {
 

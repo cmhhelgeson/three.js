@@ -278,3 +278,17 @@ export class For {
 	}
 
 }
+
+export class Struct {
+
+	constructor( name ) {
+
+		this.name = name;
+
+		this.properties = [];
+
+		this.isStruct = true;
+
+	}
+
+}

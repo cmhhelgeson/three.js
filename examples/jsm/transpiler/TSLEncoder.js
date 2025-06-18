@@ -554,6 +554,43 @@ ${ this.tab }} )`;
 
 	}
 
+	emitStructDefinition( structDefinitionNode ) {
+
+		let propertiesString = '';
+
+		this.tab += '\t';
+
+		for ( let i = 0; i < structDefinitionNode.properties.length; i ++ ) {
+
+			const { name, type } = structDefinitionNode.properties[ i ];
+
+			propertiesString += `${name}: {type: ${type}}`;
+
+			if ( i < structDefinitionNode.properties.length - 1 ) {
+
+				propertiesString += ',';
+
+
+			}
+
+			propertiesString += '\n';
+
+		}
+
+		propertiesString = propertiesString.slice( 0, - 1 );
+
+		this.tab = this.tab.slice( 0, - 1 );
+
+		const structDefinitionString = `const ${structDefinitionNode.name} = struct({
+
+${propertiesString}
+		
+})`;
+
+		return structDefinitionString;
+
+	}
+
 	emitVariables( node, isRoot = true ) {
 
 		const { name, type, value, next } = node;
