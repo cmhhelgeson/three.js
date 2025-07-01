@@ -1,0 +1,94 @@
+import GUI from 'three/examples/jsm/libs/lil-gui.module.min.js';
+import { App } from '../../utils/App';
+import * as THREE from 'three';
+import { PointsNodeMaterial, SpriteNodeMaterial } from 'three/webgpu';
+import { attribute, float } from 'three/tsl';
+
+
+class GPGPUProject extends App {
+
+	#shaders = {};
+
+	constructor() {
+
+		super();
+
+	}
+
+	async onSetupProject( projectFolder?: GUI ): Promise<void> {
+
+		await this.loadRGBE( './resources/moonless_golf_2k.hdr' );
+		this.Camera.position.z = 4;
+		await this.#setupGPUParticlesStateless();
+
+	}
+
+	createWebGPUSimpleQuadMaterial() {
+
+		return new PointsNodeMaterial( {
+			sizeNode: float( 10 ),
+			//sizeAttenuation: true,
+		} );
+
+
+
+	}
+
+	createWebGLSimpleQuadMaterial() {
+
+		return new THREE.PointsMaterial( { size: 10.0 } );
+
+	}
+
+	createMaterial() {
+
+		if ( this.rendererType === 'WebGL' ) {
+
+			return this.createWebGLSimpleQuadMaterial();
+
+		}
+
+	}
+
+	async #setupGPUParticlesStateless() {
+
+		this.#shaders[ 'simpleQuad' ] = await this.loadShaders( './resources/shaders/simple-quad' );
+
+		const numParticles = 1;
+		const pointGeo = new THREE.BufferGeometry();
+		const positions = new Float32Array( [ 0, 0, 0 ] );
+		pointGeo.setAttribute( 'position', new THREE.BufferAttribute( positions, 3 ) );
+
+		const pointMaterial = this.createMaterial();
+
+		for ( let i = 0; i < numParticles; i ++ ) {
+
+			positions[ i * 3 ] = i;
+			positions[ i * 3 + 1 ] = 0;
+			positions[ i * 3 + 2 ] = 0;
+
+		}
+
+		const mesh = this.rendererType === 'WebGL' ? new THREE.Points( pointGeo, pointMaterial ) : new THREE.Sprite( pointMaterial );
+		this.Scene.add( mesh );
+
+	}
+
+	onStep( dt: number, totalTimeElapsed: number ) {
+
+
+	}
+
+}
+
+const APP_ = new GPGPUProject();
+window.addEventListener( 'DOMContentLoaded', async () => {
+
+	await APP_.initialize( {
+		debug: false,
+		projectName: 'GPGPU Particles',
+		rendererType: 'WebGPU',
+		initialCameraMode: 'perspective'
+	} );
+
+} );

@@ -1,0 +1,76 @@
+<html lang="en">
+	<head>
+		<title>three.js webgpu - texture gradient</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link type="text/css" rel="stylesheet" href="main.css">
+	</head>
+	<body>
+
+		<div id="info">
+			<a href="https://threejs.org" target="_blank" rel="noopener">three.js</a>
+			<br />This example demonstrate texture gradient
+			<br /> Left canvas is using WebGPU Backend, right canvas is WebGL Backend.
+			<br /> The bottom half of the texture benefits from the gradient to achieve better blur quality.
+		</div>
+
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../build/three.webgpu.js",
+					"three/webgpu": "../build/three.webgpu.js",
+					"three/tsl": "../build/three.tsl.js",
+					"three/addons/": "./jsm/"
+				}
+			}
+		</script>
+
+		<script type="module">
+
+			import { instancedArray, instanceIndex, Fn, If, vec3, } from 'three/tsl';
+			import * as THREE from 'three/webgpu';
+
+			const count = 2;
+			const posArray = instancedArray( new Float32Array( count * 3 ), 'vec3' ).setPBO( true );
+
+			const changeOnlySecondElement = Fn( () => {
+
+				const firstElement = posArray.element( 0 ).toVar( 'test1' );
+				const secondElement = posArray.element( 1 ).toVar( 'test2' );
+			
+				If( instanceIndex.equal( 1 ), () => { //ONLY if instanceIndex is 0
+
+					firstElement.assign( vec3( 1, 1, 1 ) ); //assign to element 1 only
+
+				} );
+
+			} )().compute( count );
+
+			console.log( 'Array before: ' + posArray.value.array );
+
+			const renderer = new THREE.WebGPURenderer( { forceWebGL: true } );
+			renderer.computeAsync( changeOnlySecondElement )
+				.then( () => renderer.getArrayBufferAsync( posArray.value ) )
+				.then( ( buffer ) =>
+					console.log( 'Array after: ' + new Float32Array( buffer ) ) );
+
+		</script>
+	</body>
+</html>
+
+
+// vars
+vec3 nodeVar0;
+uint nodeVar0Size;
+vec3 test1;
+vec3 nodeVar1;
+vec3 test2;
+// transforms
+
+// flow
+// code
+nodeVar0Size = uint( textureSize( nodeUniform0, 0 ).x );
+nodeVar0 = vec4(texelFetch( nodeUniform0, ivec2(0u % nodeVar0Size, 0u / nodeVar0Size), 0 )).xyz;
+test1 = nodeVar0;
+nodeVar1 = vec4(texelFetch( nodeUniform0, ivec2(1u % nodeVar0Size, 1u / nodeVar0Size), 0 )).xyz;
+test2 = nodeVar1;
