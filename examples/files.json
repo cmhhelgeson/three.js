@@ -289,7 +289,8 @@
 		"webgl_volume_instancing",
 		"webgl_volume_perlin",
 		"webgl_worker_offscreencanvas",
-		"webgl_performance"
+		"webgl_performance",
+		"webgl_simple_point"
 	],
 	"webgpu (wip)": [
 		"webgpu_animation_retargeting",
@@ -465,7 +466,8 @@
 		"webgpu_water",
 		"webgpu_xr_rollercoaster",
 		"webgpu_xr_cubes",
-		"webgpu_xr_native_layers"
+		"webgpu_xr_native_layers",
+		"webgpu_simple_point",
 	],
 	"webaudio": [
 		"webaudio_orientation",
