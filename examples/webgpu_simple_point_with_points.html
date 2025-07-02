@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js - water</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link type="text/css" rel="stylesheet" href="main.css">
+	</head>
+	<body>
+
+		<div id="container"></div>
+		<div id="info">
+			<a href="https://threejs.org" target="_blank" rel="noopener noreferrer">three.js</a> - water<br />
+			<a href="https://skfb.ly/6WOOR" target="_blank" rel="noopener">The Night Pool</a> by 
+			<a href="https://sketchfab.com/syntheticplants" target="_blank" rel="noopener">syntheticplants</a> is licensed under <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a><br />
+		</div>
+
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../build/three.webgpu.js",
+					"three/webgpu": "../build/three.webgpu.js",
+					"three/tsl": "../build/three.tsl.js",
+					"three/addons/": "./jsm/"
+				}
+			}
+		</script>
+
+		<script type="module">
+
+			import * as THREE from 'three';
+
+			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+			import { UltraHDRLoader } from 'three/addons/loaders/UltraHDRLoader.js';
+			import { vec3 } from 'three/tsl';
+
+			let scene, camera, renderer, controls;
+
+			init();
+
+			async function init() {
+
+				scene = new THREE.Scene();
+
+				const loader = new UltraHDRLoader();
+				loader.setDataType( THREE.HalfFloatType );
+				loader.load( 'textures/equirectangular/moonless_golf_2k.hdr.jpg', function ( texture ) {
+
+					texture.mapping = THREE.EquirectangularReflectionMapping;
+					texture.needsUpdate = true;
+
+					scene.background = texture;
+					scene.backgroundIntensity = 0.1;
+					//this.#scene.environmentIntensity = 1.0;
+					scene.environment = texture;
+
+				} );
+
+				const aspect = window.innerWidth / window.innerHeight;
+
+				camera = new THREE.PerspectiveCamera( 50, aspect, 0.1, 2000 );
+				camera.position.z = 4;
+
+				const pointGeo = new THREE.BufferGeometry();
+				const positions = new Float32Array( [ 1, 1, 1 ] );
+				pointGeo.setAttribute( 'position', new THREE.BufferAttribute( positions, 3 ) );
+				const pointMaterial = new THREE.PointsMaterial( { size: 10.0 } );
+				const mesh = new THREE.Points( pointGeo, pointMaterial );
+				scene.add( mesh );
+			
+				// renderer
+
+				renderer = new THREE.WebGPURenderer();
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				renderer.setPixelRatio( window.devicePixelRatio );
+				renderer.setAnimationLoop( animate );
+				document.body.appendChild( renderer.domElement );
+
+
+				controls = new OrbitControls( camera, renderer.domElement );
+				controls.enableDamping = true;
+				controls.target.set( 0, 0, - 5 );
+				controls.update();
+
+				//
+
+				window.addEventListener( 'resize', onWindowResize );
+
+			}
+
+			function onWindowResize() {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+			}
+
+			function animate() {
+
+				renderer.render( scene, camera );
+
+				controls.update();
+
+			}
+
+		</script>
+
+</body>
+</html>

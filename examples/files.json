@@ -467,7 +467,8 @@
 		"webgpu_xr_rollercoaster",
 		"webgpu_xr_cubes",
 		"webgpu_xr_native_layers",
-		"webgpu_simple_point",
+		"webgpu_simple_point_with_points",
+		"webgpu_simple_point_with_sprite",
 	],
 	"webaudio": [
 		"webaudio_orientation",
