@@ -496,13 +496,11 @@
 
 				await renderer.computeAsync( computeInit );
 
-				renderer.info.autoReset = false;
-
-				 const stepAnimation = async function () {
+				const bitonicSortMethodOne = ( renderer, currentStep, maxSteps ) => {
 
 					renderer.info.reset();
 
-					if ( currentStep !== MAX_STEPS ) {
+					if ( currentStep !== maxSteps ) {
 
 						renderer.compute( computeBitonicStep );
 
@@ -525,8 +523,17 @@
 
 					}
 
-					renderer.resolveTimestampsAsync( THREE.TimestampQuery.COMPUTE );
+					return currentStep;
 
+				};
+
+				renderer.info.autoReset = false;
+
+				 const stepAnimation = async function () {
+
+					currentStep = bitonicSortMethodOne( renderer, currentStep, MAX_STEPS );
+
+					renderer.resolveTimestampsAsync( THREE.TimestampQuery.COMPUTE );
 
 					const algo = new Uint32Array( await renderer.getArrayBufferAsync( nextAlgoBuffer ) );
 					nextStepGlobal = algo[ 0 ] > StepType.DISPERSE_LOCAL;

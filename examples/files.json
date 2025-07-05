@@ -314,6 +314,7 @@
 		"webgpu_compute_particles_rain",
 		"webgpu_compute_particles_snow",
 		"webgpu_compute_points",
+		"webgpu_compute_reduce",
 		"webgpu_compute_sort_bitonic",
 		"webgpu_compute_texture",
 		"webgpu_compute_texture_3d",
@@ -467,8 +468,9 @@
 		"webgpu_xr_rollercoaster",
 		"webgpu_xr_cubes",
 		"webgpu_xr_native_layers",
-		"webgpu_simple_point_with_points",
-		"webgpu_simple_point_with_sprite",
+		"webgpu_simple_point_with_points_no_node",
+		"webgpu_simple_point_with_sprite_no_node",
+		"webgpu_simple_point_with_sprite_yes_node"
 	],
 	"webaudio": [
 		"webaudio_orientation",
