@@ -55,7 +55,7 @@
 		<script type="module">
 
 			import * as THREE from 'three';
-			import { storage, Loop, If, vec3, uniform, uv, uint, float, Fn, vec2, invocationLocalIndex, uvec2, floor, instanceIndex, workgroupId } from 'three/tsl';
+			import { storage, Loop, If, vec3, uniform, uv, uint, float, Fn, vec2, invocationLocalIndex, uvec2, floor, instanceIndex, workgroupId, workgroupBarrier } from 'three/tsl';
 
 			import WebGPU from 'three/addons/capabilities/WebGPU.js';
 
@@ -67,7 +67,7 @@
 			};
 
 			// Total number of elements and the dimensions of the display grid.
-			const size = 65536;
+			const size = 262144;
 			const gridDim = Math.sqrt( size );
 
 			// Algorithm speed increase as you iterate through algorithms array
@@ -92,6 +92,9 @@
 				state: 'Run Algo',
 				numThreadsDispatched: uniform( size / 2 )
 			};
+			
+			// https://medium.com/@rimikadhara/7-step-optimization-of-parallel-reduction-with-cuda-33a3b2feafd8
+			// https://superjomn.github.io/posts/reduce-cuda/
 
 			const gui = new GUI();
 
@@ -261,6 +264,9 @@
 
 				}
 
+				// Thanks to Sam0oneau of Graphics Programming Discord for the explanation.
+				// Many of the comments are paraphrased or taken directly from him.
+				// (Graphics Programming Discord Message Link): https://discord.com/channels/318590007881236480/374061825454768129/1391248956171882597
 				const computeReduce1Fn = Fn( () => {
 
 					const tid = uint( maxWorkgroupSize ).mul( workgroupId.x ).mul( invocationLocalIndex );
@@ -276,15 +282,34 @@
 
 				} )();
 
-				const reduce1Calls = [
 
-					computeReduce1Fn.compute( size, [ maxWorkgroupSize ] ),
+				// Things we want to avoid when deciding which option to use:
+				// Load Balance:
+				//	Will 1 workgroup persist longer than another (i.e many blocks inactive/GPU occupied but underutilized because one block's still doing work)
+				// Launch Overhead:
+				//	More workgroups equals more overhead, which matters for small kernels.
+				//	With small kernels, workgroup launch overhead can exceed kernel execution.
+			
+				// Dispatch Options:
+				// Workgroup Size 256: Execute a reduction on 256 threads per workgroup by 256 workgroups by 4 elements (4 loops within thread)
+				//	Pros: Maxing out workgroup size w/modest workgroup dispatch and fast threads.
+				//	Cons: Not everyone has GPU with 256 capable GPU
+				// Workgroup Size 64: Execute a reduction on 64 threads per workgroup by 1024 workgroups by 4 elements (4 loops)
+				//	Pros: Low work per thread
+				//	Cons: Larger workgroup overhead
+				// Workgroup Size 64: Execute a reduction on 64 threads per workgroup by 64 workgroups by 64 elements (64 loops)
+				// Execute a reduction on 256 by 256 by 4 elements (64 by 64 by 64 elements)
+				// First 256 by 256 elements are where the reducton is written in the first kernel pass
+				// We don't want to execute one thread/invocation per element
+
+				const reduce1Calls = [
+					computeReduce1Fn.compute( maxWorkgroupSize * maxWorkgroupSize, [ maxWorkgroupSize ] ),
 					computeReduce1Fn.compute( maxWorkgroupSize, [ maxWorkgroupSize ] ),
 					computeReduce1Fn.compute( 1, [ 1 ] ),
 			
 				];
 
-				/* const computeReduce2 = Fn( () => {
+				const computeReduce2 = Fn( () => {
 
 					const tid = workgroupSize.mul( workgroupId.x ).mul( invocationLocalIndex );
 
@@ -319,9 +344,11 @@
 			
 					} );
 
-				} );
+				} )();
 
-				const reduce3 = Fn( () => {
+
+
+				/*const reduce3 = Fn( () => {
 
 			
 
