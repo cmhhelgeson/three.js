@@ -55,7 +55,7 @@
 		<script type="module">
 
 			import * as THREE from 'three/webgpu';
-			import { storage, If, vec3, not, uniform, uv, uint, float, Fn, vec2, abs, int, invocationLocalIndex, workgroupArray, uvec2, floor, instanceIndex, workgroupBarrier, atomicAdd, atomicStore, workgroupId } from 'three/tsl';
+			import { storage, If, vec3, not, uniform, uv, uint, float, Fn, vec2, abs, int, invocationLocalIndex, workgroupArray, uvec2, floor, instanceIndex, workgroupBarrier, atomicAdd, atomicStore, workgroupId, getBitonicFlipIndices, getBitonicDisperseIndices } from 'three/tsl';
 
 			import WebGPU from 'three/addons/capabilities/WebGPU.js';
 
@@ -195,37 +195,6 @@
 				const randomizedElementsBuffer = new THREE.StorageInstancedBufferAttribute( size, 1 );
 				const randomizedElementsStorage = storage( randomizedElementsBuffer, 'uint', size ).setPBO( true ).setName( 'RandomizedElements' );
 
-				const getFlipIndices = ( index, blockHeight ) => {
-
-					const blockOffset = ( index.mul( 2 ).div( blockHeight ) ).mul( blockHeight );
-					const halfHeight = blockHeight.div( 2 );
-					const idx = uvec2(
-						index.mod( halfHeight ),
-						blockHeight.sub( index.mod( halfHeight ) ).sub( 1 )
-					);
-					idx.x.addAssign( blockOffset );
-					idx.y.addAssign( blockOffset );
-
-					return idx;
-
-				};
-
-				const getDisperseIndices = ( index, blockHeight ) => {
-
-					const blockOffset = ( ( index.mul( 2 ) ).div( blockHeight ) ).mul( blockHeight );
-					const halfHeight = blockHeight.div( 2 );
-					const idx = uvec2(
-						index.mod( halfHeight ),
-						( index.mod( halfHeight ) ).add( halfHeight )
-					);
-
-					idx.x.addAssign( blockOffset );
-					idx.y.addAssign( blockOffset );
-
-					return idx;
-
-				};
-
 				const localStorage = workgroupArray( 'uint', 64 * 2 );
 
 				// Swap the elements in local storage
@@ -293,22 +262,22 @@
 					// TODO: Convert to switch block.
 					If( nextAlgo.equal( uint( StepType.FLIP_LOCAL ) ), () => {
 
-						const idx = getFlipIndices( invocationLocalIndex, nextBlockHeight );
+						const idx = getBitonicFlipIndices( invocationLocalIndex, nextBlockHeight );
 						localCompareAndSwap( idx.x, idx.y );
 
 					} ).ElseIf( nextAlgo.equal( uint( StepType.DISPERSE_LOCAL ) ), () => {
 
-						const idx = getDisperseIndices( invocationLocalIndex, nextBlockHeight );
+						const idx = getBitonicDisperseIndices( invocationLocalIndex, nextBlockHeight );
 						localCompareAndSwap( idx.x, idx.y );
 
 					} ).ElseIf( nextAlgo.equal( uint( StepType.FLIP_GLOBAL ) ), () => {
 
-						const idx = getFlipIndices( instanceIndex, nextBlockHeight );
+						const idx = getBitonicFlipIndices( instanceIndex, nextBlockHeight );
 						globalCompareAndSwap( idx.x, idx.y );
 
 					} ).ElseIf( nextAlgo.equal( uint( StepType.DISPERSE_GLOBAL ) ), () => {
 
-						const idx = getDisperseIndices( instanceIndex, nextBlockHeight );
+						const idx = getBitonicDisperseIndices( instanceIndex, nextBlockHeight );
 						globalCompareAndSwap( idx.x, idx.y );
 
 					} );

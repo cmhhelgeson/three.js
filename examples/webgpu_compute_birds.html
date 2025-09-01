@@ -37,7 +37,7 @@
 		<script type="module">
 
 			import * as THREE from 'three/webgpu';
-			import { uniform, varying, vec4, add, sub, max, dot, sin, mat3, uint, negate, instancedArray, cameraProjectionMatrix, cameraViewMatrix, positionLocal, modelWorldMatrix, sqrt, attribute, property, float, Fn, If, cos, Loop, Continue, normalize, instanceIndex, length } from 'three/tsl';
+			import { uniform, varying, vec4, add, sub, max, dot, sin, mat3, modInt, floor, uint, vec3, negate, instancedArray, cameraProjectionMatrix, cameraViewMatrix, positionLocal, modelWorldMatrix, sqrt, attribute, property, float, Fn, If, cos, Loop, Continue, normalize, instanceIndex, length, int } from 'three/tsl';
 
 			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
@@ -51,11 +51,18 @@
 			let last = performance.now();
 
 			let pointer, raycaster;
-			let computeVelocity, computePosition, effectController;
+			let computeVelocity, computePosition, computeGridPosition, effectController;
 
 			const BIRDS = 16384;
 			const SPEED_LIMIT = 9.0;
-			const BOUNDS = 800, BOUNDS_HALF = BOUNDS / 2;
+			// Square grid for simplicity
+			const INIT_BOUNDS = 800, INIT_BOUNDS_HALF = INIT_BOUNDS / 2;
+			const BOUNDS = 1200, BOUNDS_HALF = BOUNDS / 2;
+
+			//
+			const GRID_CELL_SIZE = Math.ceil( 38.8908729653 / 2 );
+			const GRID_DIM_X = BOUNDS / GRID_CELL_SIZE;
+			const GRID_DIM_Y = BOUNDS / GRID_CELL_SIZE;
 
 			// Custom Geometry - using 3 triangles each. No normals currently.
 			class BirdGeometry extends THREE.BufferGeometry {
@@ -157,6 +164,18 @@
 				pointer = new THREE.Vector2();
 				raycaster = new THREE.Raycaster();
 
+				effectController = {
+					separation: uniform( 15.0 ).setName( 'separation' ),
+					alignment: uniform( 20.0 ).setName( 'alignment' ),
+					cohesion: uniform( 20.0 ).setName( 'cohesion' ),
+					freedom: uniform( 0.75 ).setName( 'freedom' ),
+					now: uniform( 0.0 ),
+					deltaTime: uniform( 0.0 ).setName( 'deltaTime' ),
+					rayOrigin: uniform( new THREE.Vector3() ).setName( 'rayOrigin' ),
+					rayDirection: uniform( new THREE.Vector3() ).setName( 'rayDirection' ),
+					loggedBuffer: 'gridPositionStorage'
+				};
+
 				// Sky
 
 				const geometry = new THREE.IcosahedronGeometry( 1, 6 );
@@ -195,13 +214,14 @@
 				const positionArray = new Float32Array( BIRDS * 3 );
 				const velocityArray = new Float32Array( BIRDS * 3 );
 				const phaseArray = new Float32Array( BIRDS );
+				const gridPositionArray = new Uint32Array( BIRDS );
 
 				for ( let i = 0; i < BIRDS; i ++ ) {
 
-					const posX = Math.random() * BOUNDS - BOUNDS_HALF;
-					const posY = Math.random() * BOUNDS - BOUNDS_HALF;
-					const posZ = Math.random() * BOUNDS - BOUNDS_HALF;
-
+					const posX = Math.random() * INIT_BOUNDS - INIT_BOUNDS_HALF;
+					const posY = Math.random() * INIT_BOUNDS - INIT_BOUNDS_HALF;
+					const posZ = Math.random() * INIT_BOUNDS - INIT_BOUNDS_HALF;
+			
 					positionArray[ i * 3 + 0 ] = posX;
 					positionArray[ i * 3 + 1 ] = posY;
 					positionArray[ i * 3 + 2 ] = posZ;
@@ -216,33 +236,48 @@
 
 					phaseArray[ i ] = 1;
 
+					gridPositionArray[ i ] = 0;
+
 				}
 
 				// Labels applied to storage nodes and uniform nodes are reflected within the shader output,
 				// and are useful for debugging purposes.
 
-				const positionStorage = instancedArray( positionArray, 'vec3' ).setName( 'positionStorage' );
-				const velocityStorage = instancedArray( velocityArray, 'vec3' ).setName( 'velocityStorage' );
-				const phaseStorage = instancedArray( phaseArray, 'float' ).setName( 'phaseStorage' );
+				const storageBuffers = {
+					positionStorage: instancedArray( positionArray, 'vec3' ).setName( 'positionStorage' ).setPBO( true ),
+					velocityStorage: instancedArray( velocityArray, 'vec3' ).setName( 'velocityStorage' ).setPBO( true ),
+					phaseStorage: instancedArray( phaseArray, 'float' ).setName( 'phaseStorage' ).setPBO( true ),
+					gridPositionStorage: instancedArray( gridPositionArray, 'uint' ).setPBO( true ),
+				};
 
-				// The Pixel Buffer Object (PBO) is required to get the GPU computed data in the WebGL2 fallback.
+				console.log( storageBuffers.positionStorage );
 
-				positionStorage.setPBO( true );
-				velocityStorage.setPBO( true );
-				phaseStorage.setPBO( true );
+				const functionObj = {};
+				functionObj[ 'Log Buffer' ] = async() => {
+
+					const selectedBuffer = storageBuffers[ effectController.loggedBuffer ];
+
+					if ( effectController.loggedBuffer === 'gridPositionStorage' ) {
+
+						console.log( new Uint32Array( await renderer.getArrayBufferAsync( selectedBuffer.value ) ) );
+
+					} else {
+
+						console.log( new Float32Array( await renderer.getArrayBufferAsync( selectedBuffer.value ) ) );
+
+					}
+
+				};
 
 				// Define Uniforms. Uniforms only need to be defined once rather than per shader.
 
-				effectController = {
-					separation: uniform( 15.0 ).setName( 'separation' ),
-					alignment: uniform( 20.0 ).setName( 'alignment' ),
-					cohesion: uniform( 20.0 ).setName( 'cohesion' ),
-					freedom: uniform( 0.75 ).setName( 'freedom' ),
-					now: uniform( 0.0 ),
-					deltaTime: uniform( 0.0 ).setName( 'deltaTime' ),
-					rayOrigin: uniform( new THREE.Vector3() ).setName( 'rayOrigin' ),
-					rayDirection: uniform( new THREE.Vector3() ).setName( 'rayDirection' )
-				};
+				// 15 + 20 + 20 = 55
+
+				// farthest distance a particle can be away and still be valid
+				// gridSize ^ 2 + gridSize ^ 2 = 55 ^ 2
+				// ~ 20
+				const gridSize = Math.ceil( 38.8908729653 / 2 );
+
 
 				// Create geometry
 
@@ -252,6 +287,8 @@
 				// Animate bird mesh within vertex shader, then apply position offset to vertices.
 
 				const birdVertexTSL = Fn( () => {
+
+					const { positionStorage, phaseStorage, velocityStorage } = storageBuffers;
 
 					const reference = attribute( 'reference' );
 					const birdVertex = attribute( 'birdVertex' );
@@ -312,7 +349,35 @@
 				// Define GPU Compute shaders.
 				// Shaders are computationally identical to their GLSL counterparts outside of texture destructuring.
 
+
+				// Compute each particle's linearized position within a three-dimensional grid
+				computeGridPosition = Fn( () => {
+
+					const { positionStorage, gridPositionStorage } = storageBuffers;
+
+					const currentPosition = positionStorage.element( instanceIndex ).toVar();
+
+					// move range of position from -BOUNDS_HALF -> BOUNDS_HALF to 0 -> BOUNDS
+					currentPosition.addAssign( vec3( BOUNDS_HALF ) );
+
+
+					const xGridPos = uint( floor( currentPosition.x.div( GRID_CELL_SIZE ) ) );
+					const yGridPos = uint( floor( currentPosition.y.div( GRID_CELL_SIZE ) ) );
+					const zGridPos = uint( floor( currentPosition.z.div( GRID_CELL_SIZE ) ) );
+
+					// Increment into zSlice
+					const zSlice = zGridPos.mul( GRID_DIM_X ).mul( GRID_DIM_Y );
+					const ySlice = yGridPos.mul( GRID_DIM_X );
+
+					const linearizedIndex = zSlice.add( ySlice ).add( xGridPos );
+
+					gridPositionStorage.element( instanceIndex ).assign( linearizedIndex );
+
+				} )().compute( BIRDS );
+
 				computeVelocity = Fn( () => {
+
+					const { positionStorage, velocityStorage } = storageBuffers;
 
 					// Define consts
 					const PI = float( 3.141592653589793 );
@@ -437,8 +502,53 @@
 				} )().compute( BIRDS );
 				computePosition = Fn( () => {
 
+					const { positionStorage, phaseStorage, velocityStorage } = storageBuffers;
+
 					const { deltaTime } = effectController;
-					positionStorage.element( instanceIndex ).addAssign( velocityStorage.element( instanceIndex ).mul( deltaTime ).mul( 15.0 ) );
+
+
+					const currentPosition = positionStorage.element( instanceIndex ).toVar();
+					const modifiedPosition = currentPosition.add( velocityStorage.element( instanceIndex ).mul( deltaTime ).mul( 15.0 ) );
+
+					If( modifiedPosition.x.greaterThan( BOUNDS_HALF ), () => {
+
+						modifiedPosition.x.assign( negate( BOUNDS_HALF ).add( modifiedPosition.x.sub( BOUNDS_HALF ) ) );
+
+					} );
+
+					If( modifiedPosition.y.greaterThan( BOUNDS_HALF ), () => {
+
+						modifiedPosition.y.assign( negate( BOUNDS_HALF ).add( modifiedPosition.y.sub( BOUNDS_HALF ) ) );
+
+					} );
+
+					If( modifiedPosition.z.greaterThan( BOUNDS_HALF ), () => {
+
+						modifiedPosition.z.assign( negate( BOUNDS_HALF ).add( modifiedPosition.z.sub( BOUNDS_HALF ) ) );
+			
+					} );
+
+
+					If( modifiedPosition.x.lessThan( negate( BOUNDS_HALF ) ), () => {
+
+						modifiedPosition.x.assign( float( BOUNDS_HALF ).add( modifiedPosition.x.add( BOUNDS_HALF ) ) );
+
+					} );
+
+					If( modifiedPosition.y.lessThan( negate( BOUNDS_HALF ) ), () => {
+
+						modifiedPosition.y.assign( float( BOUNDS_HALF ).add( modifiedPosition.y.add( BOUNDS_HALF ) ) );
+
+					} );
+
+					If( modifiedPosition.z.lessThan( negate( BOUNDS_HALF ) ), () => {
+
+						modifiedPosition.z.assign( float( BOUNDS_HALF ).add( modifiedPosition.z.add( BOUNDS_HALF ) ) );
+			
+					} );
+
+
+					positionStorage.element( instanceIndex ).assign( modifiedPosition );
 
 					const velocity = velocityStorage.element( instanceIndex );
 					const phase = phaseStorage.element( instanceIndex );
@@ -469,6 +579,17 @@
 				gui.add( effectController.separation, 'value', 0.0, 100.0, 1.0 ).name( 'Separation' );
 				gui.add( effectController.alignment, 'value', 0.0, 100, 0.001 ).name( 'Alignment ' );
 				gui.add( effectController.cohesion, 'value', 0.0, 100, 0.025 ).name( 'Cohesion' );
+
+				const debugFolder = gui.addFolder( 'Debug' );
+				debugFolder.add( functionObj, 'Log Buffer' );
+				debugFolder.add( effectController, 'loggedBuffer', [
+					'positionStorage',
+					'gridPositionStorage',
+					'velocityStorage',
+					'phaseStorage'
+				] ).name( 'Buffer to Log' );
+
+
 				gui.close();
 
 			}
@@ -514,6 +635,7 @@
 				effectController.rayOrigin.value.copy( raycaster.ray.origin );
 				effectController.rayDirection.value.copy( raycaster.ray.direction );
 
+				renderer.compute( computeGridPosition );
 				renderer.compute( computeVelocity );
 				renderer.compute( computePosition );
 				renderer.resolveTimestampsAsync( THREE.TimestampQuery.COMPUTE );

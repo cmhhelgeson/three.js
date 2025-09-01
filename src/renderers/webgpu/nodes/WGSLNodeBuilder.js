@@ -1929,6 +1929,8 @@ ${ flowData.code }
 
 			this.computeShader = this._getWGSLComputeCode( shadersData.compute, workgroupSize );
 
+			console.log( this.computeShader );
+
 		}
 
 	}
