@@ -48,22 +48,81 @@ export class BitonicSort {
 
 	constructor( renderer, dataBuffer, options = {} ) {
 
-		// Arguments
+		/**
+		 * A reference to the renderer.
+		 *
+		 * @type {Renderer}
+		 */
 		this.renderer = renderer;
+
+		/**
+		 * A reference to the StorageBufferNode holding the data that will be sorted  .
+		 *
+		 * @type {StorageBufferNode}
+		 */
 		this.dataBuffer = dataBuffer;
-		this.workgroupSize = options.workgroupSize ? options.workgroupSize : 64;
-		this.sideEffectBuffers = options.sideEffectBuffers ? options.sideEffectBuffers : [];
+
+		/**
+		 * The size of the data.
+		 *
+		 * @type {StorageBufferNode}
+		 */
 		this.count = dataBuffer.value.count;
 
-		// Helper bufferes
-		this.localStorage = workgroupArray( 'uint', this.workgroupSize * 2 );
-		this.tempStorage = instancedArray( dataBuffer.value.count, 'uint' );
-		this.infoStorage = instancedArray( new Uint32Array( 1, 2, 2 ), 'uint' );
+		/**
+		 * The workgroup size of the compute shaders executed during the sort.
+		 *
+		 * @type {StorageBufferNode}
+		*/
+		this.workgroupSize = options.workgroupSize ? Math.min( this.count, options.workgroupSize ) : Math.min( this.count, 64 );
+		//this.sideEffectBuffers = options.sideEffectBuffers ? options.sideEffectBuffers : [];
 
+		// Helper buffers
+
+		/**
+		 * A node representing a workgroup scoped buffer that holds locally sorted elements.
+		 *
+		 * @type {WorkgroupInfoNode}
+		*/
+		this.localStorage = workgroupArray( 'uint', this.workgroupSize * 2 );
+
+		/**
+		 * A node representing a storage buffer used for transfering the result of the global sort back to the original data buffer.
+		 *
+		 * @type {StorageBufferNode}
+		*/
+		this.tempStorage = instancedArray( dataBuffer.value.count, 'uint' );
+
+		/**
+		 * TODO: Determine if needed.
+		 *
+		 * @type {StorageBufferNode}
+		*/
+		this.infoStorage = instancedArray( new Uint32Array( 1, 2, 2 ), 'uint' ).setName( 'BitonicSortInfo' );
+
+		/**
+		 * The number of distinct swap operations ('flips' and 'disperses') executed in an in-place
+		 * bitonic sort of the current data buffer.
+		 *
+		 * @type {number}
+		*/
 		this.swapOpCount = this._getSwapOpCount( dataBuffer.value.count );
+
+		/**
+		 * The number of compute dispatches needed to fully execute an in-place bitonic sort of the current data buffer.
+		 *
+		 * @type {number}
+		*/
 		this.dispatchCount = this._getDispatchCount();
 
-		this.sortFn = this._getSortFn();
+		// Have to create three separate shaders since we cannot switch between
+		// local and global sort in a single shader without breaking uniform control flow
+		// and thus workgroupBarrier() functionality
+		this.swapGlobalFn = this._getSwapGlobal();
+		this.swapLocalFn = this._getSwapLocal();
+		this.disperseLocalFn = this._getDisperseLocal();
+
+		// Utility functions
 		this.setAlgoFn = this._getSetAlgoFn();
 		this.alignFn = this._getAlignFn();
 		this.resetFn = this._getResetFn();
@@ -107,21 +166,9 @@ export class BitonicSort {
 
 	}
 
-	_getSortFn() {
+	_getSwapGlobal() {
 
-		const { infoStorage, tempStorage, localStorage, dataBuffer, workgroupSize } = this;
-
-		const localCompareAndSwap = ( idxBefore, idxAfter ) => {
-
-			If( localStorage.element( idxAfter ).lessThan( localStorage.element( idxBefore ) ), () => {
-
-				const temp = localStorage.element( idxBefore ).toVar();
-				localStorage.element( idxBefore ).assign( localStorage.element( idxAfter ) );
-				localStorage.element( idxAfter ).assign( temp );
-
-			} );
-
-		};
+		const { infoStorage, tempStorage, dataBuffer } = this;
 
 		const globalCompareAndSwap = ( idxBefore, idxAfter ) => {
 
@@ -146,74 +193,8 @@ export class BitonicSort {
 
 		const fnDef = Fn( () => {
 
-			// Get ids of indices needed to populate workgroup local buffer.
-			// Use .toVar() to prevent these values from being recalculated multiple times.
-			const localOffset = uint( this.workgroupSize ).mul( 2 ).mul( workgroupId.x ).toVar();
-
-			const localID1 = invocationLocalIndex.mul( 2 );
-			const localID2 = invocationLocalIndex.mul( 2 ).add( 1 );
-
-			// If we will perform a local swap, then populate the local data
-			If( currentAlgo.lessThanEqual( uint( StepType.DISPERSE_LOCAL ) ), () => {
-
-				localStorage.element( localID1 ).assign( dataBuffer.element( localOffset.add( localID1 ) ) );
-				localStorage.element( localID2 ).assign( dataBuffer.element( localOffset.add( localID2 ) ) );
-
-			} );
-
-			// Ensure that all local data has populated
-			workgroupBarrier();
-
-
 			// Perform a chunk of the sort in a single pass that operates entirely in workgroup local space
-			Switch( currentAlgo ).Case( StepType.SWAP_LOCAL, () => {
-
-				// SWAP_LOCAL will always be first pass, so we start with known block height of 2
-				const flipBlockHeight = uint( 2 );
-
-				Loop( flipBlockHeight.lessThan( workgroupSize * 2 ), () => {
-
-					// Ensure that last dispatch block executed
-					workgroupBarrier();
-
-					const flipIdx = getBitonicFlipIndices( invocationLocalIndex, flipBlockHeight );
-					localCompareAndSwap( flipIdx.x, flipIdx.y );
-
-					const localBlockHeight = flipBlockHeight.toVar();
-
-					Loop( localBlockHeight.greaterThan( 1 ), () => {
-
-						// Ensure that last dispatch op executed
-						workgroupBarrier();
-
-						const disperseIdx = getBitonicFlipIndices( invocationLocalIndex, localBlockHeight );
-						localCompareAndSwap( disperseIdx.x, disperseIdx.y );
-
-						localBlockHeight.divAssign( 2 );
-
-					} );
-
-					// flipBlockHeight *= 2;
-					flipBlockHeight.shiftLeftAssign( 1 );
-
-				} );
-
-			} ).Case( StepType.DISPERSE_LOCAL, () => {
-
-				const localBlockHeight = currentSwapSpan.toVar();
-
-				Loop( localBlockHeight.greaterThan( 1 ), () => {
-
-					workgroupBarrier();
-
-					const idx = getBitonicDisperseIndices( invocationLocalIndex, localBlockHeight );
-					localCompareAndSwap( idx.x, idx.y );
-
-					localBlockHeight.divAssign( 2 );
-
-				} );
-
-			} ).Case( StepType.FLIP_GLOBAL, () => {
+			Switch( currentAlgo ).Case( StepType.FLIP_GLOBAL, () => {
 
 				const idx = getBitonicFlipIndices( instanceIndex, currentSwapSpan );
 				globalCompareAndSwap( idx.x, idx.y );
@@ -229,18 +210,141 @@ export class BitonicSort {
 
 			} );
 
+		} )().compute( this.count, [ this.workgroupSize ] );
+
+		return fnDef;
+
+	}
+
+	_getSwapLocal() {
+
+		const { localStorage, dataBuffer, workgroupSize } = this;
+
+		const localCompareAndSwap = ( idxBefore, idxAfter ) => {
+
+			If( localStorage.element( idxAfter ).lessThan( localStorage.element( idxBefore ) ), () => {
+
+				const temp = localStorage.element( idxBefore ).toVar();
+				localStorage.element( idxBefore ).assign( localStorage.element( idxAfter ) );
+				localStorage.element( idxAfter ).assign( temp );
+
+			} );
+
+		};
+
+		const fnDef = Fn( () => {
+
+			// Get ids of indices needed to populate workgroup local buffer.
+			// Use .toVar() to prevent these values from being recalculated multiple times.
+			const localOffset = uint( this.workgroupSize ).mul( 2 ).mul( workgroupId.x ).toVar();
+
+			const localID1 = invocationLocalIndex.mul( 2 );
+			const localID2 = invocationLocalIndex.mul( 2 ).add( 1 );
+
+			localStorage.element( localID1 ).assign( dataBuffer.element( localOffset.add( localID1 ) ) );
+			localStorage.element( localID2 ).assign( dataBuffer.element( localOffset.add( localID2 ) ) );
+
+			// Ensure that all local data has populated
+			workgroupBarrier();
+
+			// Perform a chunk of the sort in a single pass that operates entirely in workgroup local space
+			// SWAP_LOCAL will always be first pass, so we start with known block height of 2
+			const flipBlockHeight = uint( 2 );
+
+			Loop( flipBlockHeight.lessThan( workgroupSize * 2 ), () => {
+
+				// Ensure that last dispatch block executed
+				workgroupBarrier();
+
+				const flipIdx = getBitonicFlipIndices( invocationLocalIndex, flipBlockHeight );
+				localCompareAndSwap( flipIdx.x, flipIdx.y );
+
+				const localBlockHeight = flipBlockHeight.toVar();
+
+				Loop( localBlockHeight.greaterThan( 1 ), () => {
+
+					// Ensure that last dispatch op executed
+					workgroupBarrier();
+
+					const disperseIdx = getBitonicFlipIndices( invocationLocalIndex, localBlockHeight );
+					localCompareAndSwap( disperseIdx.x, disperseIdx.y );
+
+					localBlockHeight.divAssign( 2 );
+
+				} );
+
+				// flipBlockHeight *= 2;
+				flipBlockHeight.shiftLeftAssign( 1 );
+
+			} );
+
+			// Ensure that all invocations have swapped their own regions of data
+			workgroupBarrier();
+
+			dataBuffer.element( localOffset.add( localID1 ) ).assign( localStorage.element( localID1 ) );
+			dataBuffer.element( localOffset.add( localID2 ) ).assign( localStorage.element( localID2 ) );
+
+
+		} )().compute( this.count, [ this.workgroupSize ] );
+
+		return fnDef;
+
+	}
+
+	_getDisperseLocal() {
+
+		const { infoStorage, localStorage, dataBuffer } = this;
+
+		const localCompareAndSwap = ( idxBefore, idxAfter ) => {
+
+			If( localStorage.element( idxAfter ).lessThan( localStorage.element( idxBefore ) ), () => {
+
+				const temp = localStorage.element( idxBefore ).toVar();
+				localStorage.element( idxBefore ).assign( localStorage.element( idxAfter ) );
+				localStorage.element( idxAfter ).assign( temp );
+
+			} );
+
+		};
+
+		const currentSwapSpan = infoStorage.element( 1 );
+
+		const fnDef = Fn( () => {
+
+			// Get ids of indices needed to populate workgroup local buffer.
+			// Use .toVar() to prevent these values from being recalculated multiple times.
+			const localOffset = uint( this.workgroupSize ).mul( 2 ).mul( workgroupId.x ).toVar();
+
+			const localID1 = invocationLocalIndex.mul( 2 );
+			const localID2 = invocationLocalIndex.mul( 2 ).add( 1 );
+
+			localStorage.element( localID1 ).assign( dataBuffer.element( localOffset.add( localID1 ) ) );
+			localStorage.element( localID2 ).assign( dataBuffer.element( localOffset.add( localID2 ) ) );
+
+			const localBlockHeight = currentSwapSpan.toVar();
+
+			Loop( localBlockHeight.greaterThan( 1 ), () => {
+
+				workgroupBarrier();
+
+				const idx = getBitonicDisperseIndices( invocationLocalIndex, localBlockHeight );
+				localCompareAndSwap( idx.x, idx.y );
+
+				localBlockHeight.divAssign( 2 );
+
+			} );
+
+
 			// Ensure that all invocations have swapped their own regions of data
 			workgroupBarrier();
 
 			// Populate output data with the results from our swaps
-			If( currentAlgo.lessThanEqual( uint( StepType.DISPERSE_LOCAL ) ), () => {
 
-				dataBuffer.element( localOffset.add( localID1 ) ).assign( localStorage.element( localID1 ) );
-				dataBuffer.element( localOffset.add( localID2 ) ).assign( localStorage.element( localID2 ) );
+			dataBuffer.element( localOffset.add( localID1 ) ).assign( localStorage.element( localID1 ) );
+			dataBuffer.element( localOffset.add( localID2 ) ).assign( localStorage.element( localID2 ) );
 
-			} );
 
-		} );
+		} )().compute( this.count, [ this.workgroupSize ] );
 
 		return fnDef;
 
@@ -309,7 +413,7 @@ export class BitonicSort {
 			} ).Default( () => {
 
 				const nextSwapSpan = currentSwapSpan.div( 2 );
-				currentAlgo.assign( select( nextSwapSpan.lessThanEqual( workgroupSize.mul( 2 ), StepType.DISPERSE_LOCAL, StepType.DISPERSE_GLOBAL ) ).uniformFlow() );
+				currentAlgo.assign( select( nextSwapSpan.lessThanEqual( uint( workgroupSize ).mul( 2 ), StepType.DISPERSE_LOCAL, StepType.DISPERSE_GLOBAL ) ).uniformFlow() );
 				currentSwapSpan.assign( nextSwapSpan );
 
 			} );
@@ -322,16 +426,27 @@ export class BitonicSort {
 
 	computeStep( renderer ) {
 
-		renderer.compute( this.sortFn );
+		// TODO: Might not be any need to run setAlgoFn if we're swapping between algos
+		// entirely based on cpu calls
 		renderer.compute( this.setAlgoFn );
 
-		if ( this.globalOpsRemaining > 0 ) {
+		// Swap local only runs once
+		if ( this.currentDispatch === 0 ) {
 
+			renderer.compute( this.swapLocalFn );
+
+		} else if ( this.globalOpsRemaining > 0 ) {
+
+			// Then run global swaps
+			renderer.compute( this.swapGlobalFn );
 			renderer.compute( this.alignFn );
 
 			this.globalOpsRemaining -= 1;
 
 		} else {
+
+			// Then run local disperses when we've finished all global swaps
+			renderer.compute( this.localDisperseFn );
 
 			const nextSpanGlobalOps = this.globalOpsInSpan + 1;
 			this.globalOpsInSpan = nextSpanGlobalOps;
@@ -345,6 +460,8 @@ export class BitonicSort {
 		if ( this.currentDispatch === this.dispatchCount ) {
 
 			renderer.compute( this.resetFn );
+
+			this.currentDispatch = 0;
 
 		}
 
