@@ -93,12 +93,18 @@ export class BitonicSort {
 		*/
 		this.tempStorage = instancedArray( dataBuffer.value.count, 'uint' );
 
+		this.infoBuffer = new Uint32Array( 1, 2, 2 );
+
 		/**
 		 * TODO: Determine if needed.
 		 *
 		 * @type {StorageBufferNode}
 		*/
-		this.infoStorage = instancedArray( new Uint32Array( 1, 2, 2 ), 'uint' ).setName( 'BitonicSortInfo' );
+		this.infoStorage = instancedArray( this.infoBuffer, 'uint' ).setName( 'BitonicSortInfo' );
+
+		this.infoStorageRead = instancedArray( this.infoBuffer, 'uint' ).setName( 'BitonicSortInfoRead' ).toReadOnly();
+
+
 
 		/**
 		 * The number of distinct swap operations ('flips' and 'disperses') executed in an in-place
@@ -118,19 +124,55 @@ export class BitonicSort {
 		// Have to create three separate shaders since we cannot switch between
 		// local and global sort in a single shader without breaking uniform control flow
 		// and thus workgroupBarrier() functionality
+
+		/**
+		 * A compute shader that swaps elements in the data buffer within a global address space.
+		 *
+		 * @type {ComputeNode}
+		*/
 		this.swapGlobalFn = this._getSwapGlobal();
+
+		/**
+		 * A compute shader that swaps elements in the data buffer within a local address space.
+		 *
+		 * @type {ComputeNode}
+		*/
 		this.swapLocalFn = this._getSwapLocal();
+
+		/**
+		 * A compute shader that performs a disperse operation on the data buffer within a local address space.
+		 *
+		 * @type {ComputeNode}
+		*/
 		this.disperseLocalFn = this._getDisperseLocal();
 
 		// Utility functions
+
+		/**
+		 * TODO.
+		 *
+		 * @type {ComputeNode}
+		*/
 		this.setAlgoFn = this._getSetAlgoFn();
+
+		/**
+		 * TODO
+		 *
+		 * @type {ComputeNode}
+		*/
 		this.alignFn = this._getAlignFn();
+
+
+		/**
+		 * TODO
+		 *
+		 * @type {ComputeNode}
+		*/
 		this.resetFn = this._getResetFn();
 
 		this.globalOpsRemaining = 0;
 		this.globalOpsInSpan = 0;
 
-		this.dispatchFn = [];
 
 	}
 
@@ -251,7 +293,7 @@ export class BitonicSort {
 			// SWAP_LOCAL will always be first pass, so we start with known block height of 2
 			const flipBlockHeight = uint( 2 );
 
-			Loop( flipBlockHeight.lessThan( workgroupSize * 2 ), () => {
+			Loop( { start: uint( 2 ), end: uint( workgroupSize * 2 ), type: 'uint', condition: '<=', update: '<<= 1' }, () => {
 
 				// Ensure that last dispatch block executed
 				workgroupBarrier();
@@ -261,7 +303,7 @@ export class BitonicSort {
 
 				const localBlockHeight = flipBlockHeight.toVar();
 
-				Loop( localBlockHeight.greaterThan( 1 ), () => {
+				Loop( { start: localBlockHeight, end: uint( 1 ), type: 'uint', condition: '>', update: '>>= 1' }, () => {
 
 					// Ensure that last dispatch op executed
 					workgroupBarrier();
@@ -293,7 +335,7 @@ export class BitonicSort {
 
 	_getDisperseLocal() {
 
-		const { infoStorage, localStorage, dataBuffer } = this;
+		const { infoStorageRead, localStorage, dataBuffer } = this;
 
 		const localCompareAndSwap = ( idxBefore, idxAfter ) => {
 
@@ -307,7 +349,7 @@ export class BitonicSort {
 
 		};
 
-		const currentSwapSpan = infoStorage.element( 1 );
+		const currentSwapSpan = infoStorageRead.element( 1 ).toVar();
 
 		const fnDef = Fn( () => {
 
@@ -323,12 +365,13 @@ export class BitonicSort {
 
 			const localBlockHeight = currentSwapSpan.toVar();
 
-			Loop( localBlockHeight.greaterThan( 1 ), () => {
+			Loop( { start: localBlockHeight, end: uint( 1 ), type: 'uint', condition: '>', update: '>>= 1' }, () => {
 
+				// Ensure that last dispatch op executed
 				workgroupBarrier();
 
-				const idx = getBitonicDisperseIndices( invocationLocalIndex, localBlockHeight );
-				localCompareAndSwap( idx.x, idx.y );
+				const disperseIdx = getBitonicFlipIndices( invocationLocalIndex, localBlockHeight );
+				localCompareAndSwap( disperseIdx.x, disperseIdx.y );
 
 				localBlockHeight.divAssign( 2 );
 
@@ -413,7 +456,13 @@ export class BitonicSort {
 			} ).Default( () => {
 
 				const nextSwapSpan = currentSwapSpan.div( 2 );
-				currentAlgo.assign( select( nextSwapSpan.lessThanEqual( uint( workgroupSize ).mul( 2 ), StepType.DISPERSE_LOCAL, StepType.DISPERSE_GLOBAL ) ).uniformFlow() );
+				currentAlgo.assign(
+					select(
+						nextSwapSpan.lessThanEqual( uint( workgroupSize ).mul( 2 ) ),
+						StepType.DISPERSE_LOCAL,
+						StepType.DISPERSE_GLOBAL
+					).uniformFlow()
+				);
 				currentSwapSpan.assign( nextSwapSpan );
 
 			} );
@@ -446,7 +495,7 @@ export class BitonicSort {
 		} else {
 
 			// Then run local disperses when we've finished all global swaps
-			renderer.compute( this.localDisperseFn );
+			renderer.compute( this.disperseLocalFn );
 
 			const nextSpanGlobalOps = this.globalOpsInSpan + 1;
 			this.globalOpsInSpan = nextSpanGlobalOps;
