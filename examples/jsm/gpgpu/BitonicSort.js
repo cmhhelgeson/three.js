@@ -12,25 +12,44 @@ const StepType = {
 
 };
 
-export const getBitonicFlipIndices = /*@__PURE__*/ Fn( ( [ index, blockHeight ] ) => {
 
-	const blockOffset = ( index.mul( 2 ).div( blockHeight ) ).mul( blockHeight );
-	const halfHeight = blockHeight.div( 2 );
+/**
+ * Returns the indices that will be compared in a bitonic flip operation.
+ *
+ * @tsl
+ * @private
+ * @param {Node<uint>} index - The compute thread's invocation id.
+ * @param {Node<uint>} swapSpan - The maximum span over which elements are being swapped.
+ * @returns {Node<uvec2>} The indices of the elements in the data buffer being compared.
+ */
+export const getBitonicFlipIndices = /*@__PURE__*/ Fn( ( [ index, swapSpan ] ) => {
+
+	const blockOffset = ( index.mul( 2 ).div( swapSpan ) ).mul( swapSpan );
+	const halfHeight = swapSpan.div( 2 );
 	const idx = uvec2(
 		index.mod( halfHeight ),
-		blockHeight.sub( index.mod( halfHeight ) ).sub( 1 )
+		swapSpan.sub( index.mod( halfHeight ) ).sub( 1 )
 	);
 	idx.x.addAssign( blockOffset );
 	idx.y.addAssign( blockOffset );
 
 	return idx;
 
-}, { index: 'uint', blockHeight: 'uint', return: 'uvec2' } );
+}, { index: 'uint', swapSpan: 'uint', return: 'uvec2' } );
 
-export const getBitonicDisperseIndices = /*@__PURE__*/ Fn( ( [ index, blockHeight ] ) => {
+/**
+ * Returns the indices that will be compared in a bitonic sort's disperse operation.
+ *
+ * @tsl
+ * @private
+ * @param {Node<uint>} index - The compute thread's invocation id.
+ * @param {Node<uint>} swapSpan - The maximum span over which elements are being swapped.
+ * @returns {Node<uvec2>} The indices of the elements in the data buffer being compared.
+ */
+export const getBitonicDisperseIndices = /*@__PURE__*/ Fn( ( [ index, swapSpan ] ) => {
 
-	const blockOffset = ( ( index.mul( 2 ) ).div( blockHeight ) ).mul( blockHeight );
-	const halfHeight = blockHeight.div( 2 );
+	const blockOffset = ( ( index.mul( 2 ) ).div( swapSpan ) ).mul( swapSpan );
+	const halfHeight = swapSpan.div( 2 );
 	const idx = uvec2(
 		index.mod( halfHeight ),
 		( index.mod( halfHeight ) ).add( halfHeight )
@@ -41,7 +60,7 @@ export const getBitonicDisperseIndices = /*@__PURE__*/ Fn( ( [ index, blockHeigh
 
 	return idx;
 
-}, { index: 'uint', blockHeight: 'uint', return: 'uvec2' } );
+}, { index: 'uint', swapSpan: 'uint', return: 'uvec2' } );
 
 // TODO: Add parameters for computing a buffer larger than vec4
 export class BitonicSort {
@@ -252,7 +271,7 @@ export class BitonicSort {
 
 			} );
 
-		} )().compute( this.count, [ this.workgroupSize ] );
+		} )().compute( this.count / 2, [ this.workgroupSize ] );
 
 		return fnDef;
 
@@ -327,7 +346,7 @@ export class BitonicSort {
 			dataBuffer.element( localOffset.add( localID2 ) ).assign( localStorage.element( localID2 ) );
 
 
-		} )().compute( this.count, [ this.workgroupSize ] );
+		} )().compute( this.count / 2, [ this.workgroupSize ] );
 
 		return fnDef;
 
@@ -387,7 +406,7 @@ export class BitonicSort {
 			dataBuffer.element( localOffset.add( localID2 ) ).assign( localStorage.element( localID2 ) );
 
 
-		} )().compute( this.count, [ this.workgroupSize ] );
+		} )().compute( this.count / 2, [ this.workgroupSize ] );
 
 		return fnDef;
 
