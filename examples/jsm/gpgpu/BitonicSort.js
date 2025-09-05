@@ -93,7 +93,7 @@ export class BitonicSort {
 		 *
 		 * @type {StorageBufferNode}
 		*/
-		this.workgroupSize = options.workgroupSize ? Math.min( this.count, options.workgroupSize ) : Math.min( this.count, 64 );
+		this.workgroupSize = options.workgroupSize ? Math.min( this.count / 2, options.workgroupSize ) : Math.min( this.count / 2, 64 );
 		//this.sideEffectBuffers = options.sideEffectBuffers ? options.sideEffectBuffers : [];
 
 		// Helper buffers
@@ -124,7 +124,6 @@ export class BitonicSort {
 		this.infoStorageRead = instancedArray( this.infoBuffer, 'uint' ).setName( 'BitonicSortInfoRead' ).toReadOnly();
 
 
-
 		/**
 		 * The number of distinct swap operations ('flips' and 'disperses') executed in an in-place
 		 * bitonic sort of the current data buffer.
@@ -134,11 +133,11 @@ export class BitonicSort {
 		this.swapOpCount = this._getSwapOpCount( dataBuffer.value.count );
 
 		/**
-		 * The number of compute dispatches needed to fully execute an in-place bitonic sort of the current data buffer.
+		 * The number of steps (i.e prepping and/or executing a swap) needed to fully execute an in-place bitonic sort of the current data buffer.
 		 *
 		 * @type {number}
 		*/
-		this.dispatchCount = this._getDispatchCount();
+		this.stepCount = this._getStepCount();
 
 		// Have to create three separate shaders since we cannot switch between
 		// local and global sort in a single shader without breaking uniform control flow
@@ -189,6 +188,7 @@ export class BitonicSort {
 		*/
 		this.resetFn = this._getResetFn();
 
+		this.currentDispatch = 0;
 		this.globalOpsRemaining = 0;
 		this.globalOpsInSpan = 0;
 
@@ -202,7 +202,7 @@ export class BitonicSort {
 
 	}
 
-	_getDispatchCount() {
+	_getStepCount() {
 
 		const logElements = Math.log2( this.count );
 		const logSwapSpan = Math.log2( this.workgroupSize * 2 );
@@ -211,19 +211,23 @@ export class BitonicSort {
 
 		// Start with 1 for initial sort over all local elements
 		let numDispatches = 1;
+		let numGlobalDisperses = 0;
 
 		for ( let i = 1; i <= numGlobalFlips; i ++ ) {
 
-			// Increment by swap's global operations and alignments
-			numDispatches += i * 2;
-			// Increment by alignment (1 per global op)
-			numDispatches += i;
-			// Increment by local sort
+			// Increment the global flip that starts each global block
 			numDispatches += 1;
+			// Increment by number of global disperses following the global flip
+			numDispatches += numGlobalDisperses;
+			// Increment by local disperse that occurs after all global swaps are finished
+			numDispatches += 1;
+
+			// Number of global disperse increases as swapSpan increases by factor of 2
+			numGlobalDisperses += 1;
 
 		}
 
-		this.dispatchCount = numDispatches;
+		return numDispatches;
 
 	}
 
@@ -525,7 +529,7 @@ export class BitonicSort {
 
 		this.currentDispatch += 1;
 
-		if ( this.currentDispatch === this.dispatchCount ) {
+		if ( this.currentDispatch === this.stepCount ) {
 
 			renderer.compute( this.resetFn );
 
@@ -542,7 +546,7 @@ export class BitonicSort {
 		this.maxGlobalOp = 0;
 		this.currentDispatch = 0;
 
-		for ( let i = 0; i < this.dispatchCount; i ++ ) {
+		for ( let i = 0; i < this.stepCount; i ++ ) {
 
 			this.computeStep( renderer );
 

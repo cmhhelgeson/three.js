@@ -85,7 +85,7 @@
 			const globalColors = [ 'rgb(1, 150, 1)', 'red' ];
 
 			// Total number of elements and the dimensions of the display grid.
-			const size = 16384;
+			const size = 512;
 			const gridDim = Math.sqrt( size );
 
 			const getNumSteps = () => {
@@ -307,6 +307,8 @@
 						sideEffectBuffers: [ 2, 3 ]
 					}
 				);
+
+				console.log( bitonicSortModule );
 
 				// Initialize each value in the elements buffer.
 				const computeInit = computeInitFn().compute( size );
