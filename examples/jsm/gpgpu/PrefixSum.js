@@ -1,4 +1,4 @@
-import { Fn, uvec2, If, instancedArray, instanceIndex, invocationLocalIndex, Loop, workgroupArray, subgroupSize, workgroupBarrier, workgroupId, uint, select, min, max, invocationSubgroupIndex, dot, uvec4, vec4, float, subgroupAdd, log2, arrayBuffer, array } from 'three/tsl';
+import { Fn, uvec2, If, instancedArray, instanceIndex, invocationLocalIndex, Loop, workgroupArray, subgroupSize, workgroupBarrier, workgroupId, uint, select, min, max, invocationSubgroupIndex, dot, uvec4, vec4, float, subgroupAdd, log2, arrayBuffer, array, subgroupShuffle, subgroupInclusiveAdd, subgroupBroadcast, subgroupIndex } from 'three/tsl';
 
 const StepType = {
 	NONE: 0,
@@ -262,6 +262,26 @@ export class PrefixSum {
 		*/
 		this.globalOpsInSpan = 0;
 
+	}
+
+	_getAlignmentInfo( workgroupSize ) {
+
+		// Multiple approaches here
+		// log2(subgroupSize) -> TSL log2 function
+		// countTrailingZeros/findLSB(subgroupSize) -> Currently unsupported function in TSL that counts trailing zeros in number bit representation
+		// Can technically petition GPU for subgroupSize in shader and calculate logs on CPU at cost of shader being generalizable across devices
+		// May also break if subgroupSize changes when device is lost or if program is rerun on lower power device
+		const subgroupSizeLog = uint( log2( float( subgroupSize ) ) ).toVar( 'subgroupSizeLog' );
+		const spineSize = uint( workgroupSize ).shiftRight( subgroupSizeLog );
+		const spineSizeLog = uint( log2( float( spineSize ) ) ).toVar( 'spineSizeLog' );
+
+		// Align size to powers of subgroupSize
+		const squaredSubgroupLog = ( spineSizeLog.add( subgroupSizeLog ).sub( 1 ) );
+		squaredSubgroupLog.divAssign( subgroupSizeLog );
+		squaredSubgroupLog.mulAssign( subgroupSizeLog );
+		const alignedSize = ( uint( 1 ).shiftLeft( squaredSubgroupLog ) ).toVar( 'alignedSize' );
+
+		return { subgroupSizeLog, spineSize, spineSizeLog, alignedSize };
 
 	}
 
@@ -364,20 +384,7 @@ export class PrefixSum {
 
 			// WORKGROUP LEVEL REDUCE
 
-			// Multiple approaches here
-			// log2(subgroupSize) -> TSL log2 function
-			// countTrailingZeros/findLSB(subgroupSize) -> Currently unsupported function in TSL that counts trailing zeros in number bit representation
-			// Can technically petition GPU for subgroupSize in shader and calculate logs on CPU at cost of shader being generalizable across devices
-			// May also break if subgroupSize changes when device is lost or if program is rerun on lower power device
-			const subgroupSizeLog = uint( log2( float( subgroupSize ) ) ).toVar( 'subgroupSizeLog' );
-			const spineSize = uint( workgroupSize ).shiftRight( subgroupSizeLog );
-			const spineSizeLog = uint( log2( float( spineSize ) ) ).toVar( 'spineSizeLog' );
-
-			// Align size to powers of subgroupSize
-			const squaredSubgroupLog = ( spineSizeLog.add( subgroupSizeLog ).sub( 1 ) );
-			squaredSubgroupLog.divAssign( subgroupSizeLog );
-			squaredSubgroupLog.mulAssign( subgroupSizeLog );
-			const alignedSize = ( uint( 1 ).shiftLeft( squaredSubgroupLog ) ).toVar( 'alignedSize' );
+			const { subgroupSizeLog, spineSizeLog, spineSize, alignedSize } = this._getAlignmentInfo( workgroupSize );
 
 			// aligned size 2 * 4
 
@@ -443,7 +450,7 @@ export class PrefixSum {
 
 	_getDownsweepFn() {
 
-		const { workPerThread, scanInBuffer, subgroupOffset, workgroupOffset, subgroupMetaRank, workgroupSize, vecCount } = this;
+		const { workPerThread, scanInBuffer, subgroupOffset, workgroupOffset, subgroupMetaRank, workgroupSize, subgroupReductionArray, vecCount } = this;
 
 		const fnDef = Fn( () => {
 
@@ -455,6 +462,7 @@ export class PrefixSum {
 
 			const tScan = array( 'uvec4', workPerThread );
 
+			// WORKGROUP REDUCE BLOCK
 
 			this._workPerThreadBlock( ( currentSubgroupInBlock ) => {
 
@@ -490,8 +498,89 @@ export class PrefixSum {
 
 				const prev = uint( 0 ).toVar();
 				const laneMask = subgroupSize.sub( 1 );
+				const circularShift = ( invocationSubgroupIndex.add( laneMask ) ).bitAnd( laneMask );
+
+				Loop( {
+					start: uint( 0 ),
+					end: workPerThread,
+					type: 'uint',
+					condition: '<',
+					name: 'currentSubgroupInBlock'
+				}, ( { currentSubgroupInBlock } ) => {
+
+					const t = subgroupShuffle(
+						subgroupInclusiveAdd( tScan.element( currentSubgroupInBlock ).w ),
+						circularShift
+					);
+
+					const addEle = prev.add( select( invocationSubgroupIndex.notEqual( 0 ), t, uint( 0 ) ).uniformFlow() );
+
+					tScan.element( currentSubgroupInBlock ).addAssign( addEle );
+
+					prev.addAssign( subgroupBroadcast( t, uint( 0 ) ) );
+
+				} );
+
+				If( invocationSubgroupIndex.equal( 0 ), () => {
+
+					subgroupReductionArray.element( subgroupIndex ).assign( prev );
+
+				} );
 
 				workgroupBarrier();
+
+
+				const offset0 = uint( 0 ).toVar();
+				const offset1 = uint( 0 );
+
+				const { subgroupSizeLog, spineSizeLog, spineSize, alignedSize } = this._getAlignmentInfo( workgroupSize );
+
+				// In cases where the number of subgroups in a workgroup is greater than the subgroup size itself,
+				// we need to iterate over the array again to capture all the data in the workgroup array buffer
+				Loop( { start: subgroupSize, end: alignedSize, condition: '<=', name: 'j', type: 'uint', update: '<<= subgroupSizeLog' }, ( { j } ) => {
+
+					const i0 = (
+						( invocationLocalIndex.add( offset0 ) ).shiftLeft( offset1 )
+					).sub( offset0 );
+
+					const pred0 = i0.lessThan( spineSize );
+
+					const t0 = subgroupInclusiveAdd(
+						select( pred0, subgroupReductionArray.element( i0 ), uint( 0 ) )
+					);
+
+					If( pred0, () => {
+
+						subgroupReductionArray.element( i0 ).assign( t0 );
+
+					} );
+
+					workgroupBarrier();
+
+					If( j.notEqual( subgroupSize ), () => {
+
+						const rShift = j.shiftRight( subgroupSizeLog );
+						const i1 = invocationLocalIndex.add( rShift );
+						If( ( i1.and( j.sub( 1 ) ) ).greaterThanEqual( rShift ), () => {
+
+							const pred1 = i1.lessThan( spineSize );
+							const t1 = select( pred1, );
+
+
+						} );
+
+
+					} ).Else( () => {
+
+						offset1.addAssign( subgroupSizeLog );
+
+
+					} );
+
+				} );
+
+				workgroupBarrier();
+
 				// LAST BLOCK
 
 				startThread.assign( startThreadBase );
