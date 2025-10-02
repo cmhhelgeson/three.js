@@ -1,4 +1,4 @@
-import { CodeNode, GLSLNodeParser, NodeBuilder, TextureNode, vectorComponents } from '../../../nodes/Nodes.js';
+import { GLSLNodeParser, NodeBuilder, TextureNode, vectorComponents, CodeNode } from '../../../nodes/Nodes.js';
 
 import NodeUniformBuffer from '../../common/nodes/NodeUniformBuffer.js';
 import NodeUniformsGroup from '../../common/nodes/NodeUniformsGroup.js';
@@ -9,62 +9,9 @@ import { NoColorSpace, ByteType, ShortType, RGBAIntegerFormat, RGBIntegerFormat,
 import { DataTexture } from '../../../textures/DataTexture.js';
 import { error } from '../../../utils.js';
 
-const uintBitCount = new CodeNode( /* glsl */`
-uint tsl_bit_count ( uint value ) {
-
-	uint newValue = value;
-	newValue = ( newValue - ( ( newValue >> 1u ) & 1431655765u ) );
-	newValue = ( ( newValue & 858993459u ) + ( ( newValue >> 2u ) & 858993459u ) );
-
-	return ( ( ( ( newValue + ( newValue >> 4u ) ) & 252645135u ) * 16843009u ) >> 24u );
-
-}
-` );
-
-const intBitCount = new CodeNode( /* glsl */`
-uint tsl_bit_count_int ( int value ) {
-
-	uint v = floatBitsToUint( intBitsToFloat( value ) );
-	v = ( v - ( ( v >> 1u ) & 1431655765u ) );
-	v = ( ( v & 858993459u ) + ( ( v >> 2u ) & 858993459u ) );
-
-	return ( ( ( ( v + ( v >> 4u ) ) & 252645135u ) * 16843009u ) >> 24u );
-
-}
-` );
-
-const uvec2BitCount = new CodeNode( /* glsl */'uint tsl_bit_count_vec2 (uvec2 value) { return tsl_bit_count(value.x) + tsl_bit_count(value.y) } )' );
-const uvec3BitCount = new CodeNode( /* glsl */'uint tsl_bit_count_vec3 (uvec3 value) { return tsl_bit_count(value.x) + tsl_bit_count(value.y) + tsl_bit_count(value.z)  } )' );
-const uvec4BitCount = new CodeNode( /* glsl */'uint tsl_bit_count_vec3 (uvec4 value) { return tsl_bit_count(value.x) + tsl_bit_count(value.y) + tsl_bit_count(value.z) + tsl_bit_count(value.w) }' );
-
-const uintFindLSB = '';
-const uintFindMSB = '';
-
-
-/* Remove polyfills and method mappings for findLSB, findMSB, and bitCount
-   when OpenGL ES 3.1 bit counting functionality is implemented in WebGL.
-   Tracking for issue found here https://github.com/KhronosGroup/WebGL/issues/3714 */
 const glslPolyfills = {
-	tsl_find_lsb: {
-		entryIndex: 0,
-		codeNodes: [ uintFindLSB ],
-	},
-	tsl_find_msb: {
-		entryIndex: 0,
-		codeNodes: [ uintFindMSB ],
-	},
-	tsl_bit_count: {
-		codeNodes: [ uintBitCount ],
-	},
-	tsl_bit_count_uvec2: {
-		codeNodes: [ uintBitCount, uvec2BitCount ]
-	},
-	tsl_bit_count_uvec3: {
-		codeNodes: [ uintBitCount, uvec3BitCount ]
-	},
-	tsl_bit_count_uvec4: {
-		codeNodes: [ uintBitCount, uvec4BitCount ]
-	}
+	bitcast_int_uint: new CodeNode( /* glsl */'uint tsl_bitcast_int_to_uint ( int x ) { return floatBitsToUint( intBitsToFloat ( x ) ); }' ),
+	bitcast_uint_int: new CodeNode( /* glsl */'int tsl_bitcast_uint_to_int ( uint x ) { return floatBitsToInt( uintBitsToFloat( x ) ); }' )
 };
 
 const glslMethods = {
@@ -74,12 +21,8 @@ const glslMethods = {
 	bitcast_int_float: 'intBitsToFloat',
 	bitcast_uint_float: 'uintBitsToFloat',
 	bitcast_float_uint: 'floatBitsToUint',
-	findLSB: 'tsl_find_lsb',
-	findMSB: 'tsl_find_msb',
-	bitCount: 'tsl_bit_count',
-	countTrailingZeros: 'tsl_find_lsb',
-	countLeadingZeros: 'tsl_find_msb',
-	countOneBits: 'tsl_bit_count'
+	bitcast_uint_int: 'tsl_bitcast_uint_to_int',
+	bitcast_int_uint: 'tsl_bitcast_int_to_uint',
 };
 
 const precisionLib = {
@@ -191,20 +134,22 @@ class GLSLNodeBuilder extends NodeBuilder {
 
 	}
 
+	/**
+	 * Includes the given method name into the current
+	 * function node.
+	 *
+	 * @private
+	 * @param {string} name - The method name to include.
+	 * @return {CodeNode} The respective code node.
+	 */
 	_include( name ) {
 
-		// Collect the array of functions needed to polyfill the specified functionality
-		const polyfill = glslPolyfills[ name ];
+		const codeNode = glslPolyfills[ name ];
+		codeNode.build( this );
 
-		for ( const codeNode of polyfill.codeNodes ) {
+		this.addInclude( codeNode );
 
-			// Build and include each relevant function
-			codeNode.build( this );
-			this.addInclude( codeNode );
-
-		}
-
-		return polyfill.entryIndex ? polyfill.codeNodes[ polyfill.entryIndex ] : polyfill.codeNodes[ 0 ];
+		return codeNode;
 
 	}
 
@@ -216,17 +161,13 @@ class GLSLNodeBuilder extends NodeBuilder {
 	 */
 	getMethod( method ) {
 
-		const glslMethod = glslMethods[ method ] || method;
+		if ( glslPolyfills[ method ] !== undefined ) {
 
-		if ( glslPolyfills[ glslMethod ] !== undefined ) {
-
-			console.log( 'calling glsl polyfill for ', method );
-
-			this._include( glslMethod );
+			this._include( method );
 
 		}
 
-		return glslMethod;
+		return glslMethods[ method ] || method;
 
 	}
 
@@ -239,7 +180,7 @@ class GLSLNodeBuilder extends NodeBuilder {
 	 */
 	getBitcastMethod( type, inputType ) {
 
-		return glslMethods[ `bitcast_${ inputType }_${ type }` ];
+		return this.getMethod( `bitcast_${ inputType }_${ type }` );
 
 	}
 
@@ -1379,8 +1320,6 @@ ${vars}
 	 */
 	_getGLSLVertexCode( shaderData ) {
 
-		console.log( shaderData );
-
 		return `#version 300 es
 
 ${ this.getSignature() }
@@ -1429,8 +1368,6 @@ void main() {
 	 * @return {string} The vertex shader.
 	 */
 	_getGLSLFragmentCode( shaderData ) {
-
-		console.log( shaderData );
 
 		return `#version 300 es
 
@@ -1541,8 +1478,6 @@ void main() {
 
 			this.vertexShader = this._getGLSLVertexCode( shadersData.vertex );
 			this.fragmentShader = this._getGLSLFragmentCode( shadersData.fragment );
-			console.log( this.vertexShader );
-			console.log( this.fragmentShader );
 
 		} else {
 
