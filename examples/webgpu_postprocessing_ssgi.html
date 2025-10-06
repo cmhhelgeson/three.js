@@ -52,7 +52,7 @@
 				scene = new THREE.Scene();
 				scene.background = new THREE.Color( 0xaaaaaa );
 
-				renderer = new THREE.WebGPURenderer();
+				renderer = new THREE.WebGPURenderer( { forceWebGL: true } );
 				//renderer.setPixelRatio( window.devicePixelRatio ); // probably too costly for most hardware
 				renderer.setSize( window.innerWidth, window.innerHeight );
 				renderer.setAnimationLoop( animate );
