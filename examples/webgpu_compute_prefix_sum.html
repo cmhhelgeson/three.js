@@ -1,0 +1,156 @@
+<html lang="en">
+	<head>
+		<title>three.js webgpu - compute reduction</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link type="text/css" rel="stylesheet" href="main.css">
+	</head>
+	<body>
+
+		<div id="info">
+			<a href="https://threejs.org" target="_blank" rel="noopener">three.js</a>
+			<br /> This example demonstrates a prefix sum operation on a buffer of data.
+			<br /> Reference implementations are translated from the WGSL code present in <a href="https://github.com/b0nes164/GPUPrefixSums/blob/main/GPUPrefixSumsWebGPUapis/SharedShaders/rts.wgsl"><i>GPUPrefixSums</i></a> by <a href="https://github.com/b0nes164">b0nes164</a>
+		</div>
+
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../build/three.webgpu.js",
+					"three/webgpu": "../build/three.webgpu.js",
+					"three/tsl": "../build/three.tsl.js",
+					"three/addons/": "./jsm/"
+				}
+			}
+		</script>
+
+		<script type="module">
+
+			import * as THREE from 'three/webgpu';
+			import { instancedArray, If, vec3, clamp, uv, uint, float, Fn, vec2, uvec2, floor, instanceIndex } from 'three/tsl';
+
+			import { PrefixSum } from 'three/addons/gpgpu/PrefixSum.js';
+
+			import WebGPU from 'three/addons/capabilities/WebGPU.js';
+
+			if ( WebGPU.isAvailable() === false ) {
+
+				document.body.appendChild( WebGPU.getErrorMessage() );
+
+				throw new Error( 'No WebGPU support' );
+
+			}
+
+			const effectController = {
+				currentStep: 'Reduce',
+			};
+
+			const size = 16384;
+
+			async function init() {
+
+				const aspect = window.innerWidth / window.innerHeight;
+				const camera = new THREE.OrthographicCamera( - aspect, aspect, 1, - 1, 0, 2 );
+				camera.position.z = 1;
+
+				const scene = new THREE.Scene();
+				scene.background = new THREE.Color( 0x212121 );
+
+				const array = new Uint32Array( Array.from( { length: size }, ( _, i ) => {
+
+					return 1;
+
+				} ) );
+
+				// Represents array of data as uints in compute shader.
+				const inputStorage = instancedArray( array, 'uint' ).setPBO( true ).setName( 'Scan_In' );
+
+				const renderer = new THREE.WebGPURenderer( { antialias: false, trackTimestamp: true } );
+				renderer.setPixelRatio( window.devicePixelRatio );
+				renderer.setSize( window.innerWidth / 2, window.innerHeight );
+
+				await renderer.init();
+
+				const prefixSumModule = new PrefixSum( renderer, inputStorage );
+
+				const plane = new THREE.Mesh( new THREE.PlaneGeometry( 1, 1 ), new THREE.MeshStandardNodeMaterial() );
+				scene.add( plane );
+
+				const animate = () => {
+
+					renderer.render( scene, camera );
+
+				};
+
+				renderer.setAnimationLoop( animate );
+				document.body.appendChild( renderer.domElement );
+
+				/*const stepAnimation = async function () {
+
+					switch ( effectController.currentStep ) {
+
+						case 'Reduce': {
+
+							prefixSumModule.computeReduce();
+
+						}
+
+						case 'Spine_Scan': {
+
+							prefixSumModule.computeSpineScan();
+
+						}
+
+						case 'Downsweep': {
+
+							prefixSumModule.computeDownsweep();
+
+						}
+
+						case 'Step_Full': {
+
+							prefixSumModule.computeStep();
+
+						}
+
+					}
+
+					prefixSumModule.computeStep();
+
+
+					renderer.render( scene, camera );
+					renderer.resolveTimestampsAsync( THREE.TimestampQuery.RENDER );
+
+					setTimeout( stepAnimation, 1000 );
+
+				}; */
+
+
+				window.addEventListener( 'resize', onWindowResize );
+
+				function onWindowResize() {
+
+					renderer.setSize( window.innerWidth, window.innerHeight );
+
+					const aspect = window.innerWidth / window.innerHeight;
+
+					const frustumHeight = camera.top - camera.bottom;
+
+					camera.left = - frustumHeight * aspect / 2;
+					camera.right = frustumHeight * aspect / 2;
+
+					camera.updateProjectionMatrix();
+
+					renderer.render( scene, camera );
+
+				}
+
+				//setTimeout( stepAnimation, 1000 );
+
+			}
+
+			init();
+
+		</script>
+	</body>
+</html>
