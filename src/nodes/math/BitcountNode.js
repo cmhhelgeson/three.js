@@ -1,14 +1,13 @@
-import { addMethodChaining, float, Fn, If, nodeProxyIntent, uint } from '../tsl/TSLCore.js';
+import { float, Fn, If, nodeProxyIntent, uint, int, uvec2, uvec3, uvec4, ivec2, ivec3, ivec4 } from '../tsl/TSLCore.js';
 import { bitcast, floatBitsToUint } from './BitcastNode.js';
 import MathNode, { negate } from './MathNode.js';
 
 const registeredBitcountFunctions = {};
 
 /**
- * This node represents an operation that reinterprets the bit representation of a value
- * in one type as a value in another type.
+ * This node represents an operation that counts the bits of a piece of shader data.
  *
- * @augments TempNode
+ * @augments MathNode
  */
 class BitcountNode extends MathNode {
 
@@ -39,15 +38,10 @@ class BitcountNode extends MathNode {
 
 	}
 
-	getNodeType( /*builder*/ ) {
-
-		return 'uint';
-
-	}
-
 	/**
 	 * Casts the input value of the function to an integer if necessary.
 	 *
+	 * @private
 	 * @param {Node<uint>|Node<int>} inputNode - The input value.
 	 * @param {Node<uint>} outputNode - The output value.
 	 * @param {string} elementType - The type of the input value.
@@ -66,7 +60,73 @@ class BitcountNode extends MathNode {
 
 	}
 
-	_constructTrailingZerosBaseLayout( method, elementType ) {
+	_returnDataNode( inputType ) {
+
+		switch ( inputType ) {
+
+			case 'uint': {
+
+				return uint;
+
+			}
+
+			case 'int': {
+
+				return int;
+
+			}
+
+			case 'uvec2': {
+
+				return uvec2;
+
+			}
+
+			case 'uvec3': {
+
+				return uvec3;
+
+			}
+
+			case 'uvec4': {
+
+				return uvec4;
+
+			}
+
+			case 'ivec2': {
+
+				return ivec2;
+
+			}
+
+			case 'ivec3': {
+
+				return ivec3;
+
+			}
+
+			case 'ivec4': {
+
+				return ivec4;
+
+			}
+
+		}
+
+	}
+
+	/**
+	 * Creates and registers a reusable GLSL function that emulates the behavior of countTrailingZeros.
+	 *
+	 * @private
+	 * @param {string} method - The name of the function to create.
+	 * @param {string} elementType - The type of the input value.
+	 * @returns {Function} - The generated function
+	 */
+	_createTrailingZerosBaseLayout( method, elementType ) {
+
+		const outputConvertNode = this._returnDataNode( elementType );
 
 		const fnDef = Fn( ( [ value ] ) => {
 
@@ -77,11 +137,13 @@ class BitcountNode extends MathNode {
 			const f = float( v.bitAnd( negate( v ) ) );
 			const uintBits = floatBitsToUint( f );
 
-			return ( uintBits.shiftRight( 23 ) ).sub( 127 );
+			const numTrailingZeros = ( uintBits.shiftRight( 23 ) ).sub( 127 );
+
+			return outputConvertNode( numTrailingZeros );
 
 		} ).setLayout( {
 			name: method,
-			type: 'uint',
+			type: elementType,
 			inputs: [
 				{ name: 'value', type: elementType }
 			]
@@ -91,51 +153,17 @@ class BitcountNode extends MathNode {
 
 	}
 
-	_constructTrailingZerosMainLayout( method, inputType, typeLength, baseFn ) {
+	/**
+	 * Creates and registers a reusable GLSL function that emulates the behavior of countLeadingZeros.
+	 *
+	 * @private
+	 * @param {string} method - The name of the function to create.
+	 * @param {string} elementType - The type of the input value.
+	 * @returns {Function} - The generated function
+	 */
+	_createLeadingZerosBaseLayout( method, elementType ) {
 
-		const fnDef = Fn( ( [ value ] ) => {
-
-			const v = uint( 0.0 );
-
-			if ( typeLength === 1 ) {
-
-				v.addAssign( baseFn( value ) );
-
-			} else {
-
-				const components = [ 'x', 'y', 'z', 'w' ];
-				for ( let i = 0; i < typeLength; i ++ ) {
-
-					const component = components[ i ];
-
-					v.addAssign( baseFn( value[ component ] ) );
-
-					// Continue loop only if it's not the maximumn number
-					If( v.equal( 32 * i ), () => {
-
-						return v;
-
-					} );
-
-				}
-
-			}
-
-			return v;
-
-		} ).setLayout( {
-			name: method,
-			type: 'uint',
-			inputs: [
-				{ name: 'value', type: inputType }
-			]
-		} );
-
-		return fnDef;
-
-	}
-
-	_constructLeadingZerosBaseLayout( method, elementType ) {
+		const outputConvertNode = this._returnDataNode( elementType );
 
 		const fnDef = Fn( ( [ value ] ) => {
 
@@ -183,11 +211,11 @@ class BitcountNode extends MathNode {
 
 			} );
 
-			return n;
+			return outputConvertNode( n );
 
 		} ).setLayout( {
 			name: method,
-			type: 'uint',
+			type: elementType,
 			inputs: [
 				{ name: 'value', type: elementType }
 			]
@@ -197,51 +225,17 @@ class BitcountNode extends MathNode {
 
 	}
 
-	_constructLeadingZerosMainLayout( method, inputType, typeLength, baseFn ) {
+	/**
+	 * Creates and registers a reusable GLSL function that emulates the behavior of countOneBits.
+	 *
+	 * @private
+	 * @param {string} method - The name of the function to create.
+	 * @param {string} elementType - The type of the input value.
+	 * @returns {Function} - The generated function
+	 */
+	_createOneBitsBaseLayout( method, elementType ) {
 
-		const fnDef = Fn( ( [ value ] ) => {
-
-			const v = uint( 0.0 );
-
-			if ( typeLength === 1 ) {
-
-				v.addAssign( baseFn( value ) );
-
-			} else {
-
-				const components = [ 'w', 'z', 'y', 'x' ];
-				for ( let i = 0; i < typeLength; i ++ ) {
-
-					const component = components[ i ];
-
-					v.addAssign( baseFn( value[ component ] ) );
-
-					If( v.notEqual( 32 * i ), () => {
-
-						return v;
-
-					} );
-
-				}
-
-			}
-
-			return v;
-
-		} ).setLayout( {
-			name: method,
-			type: 'uint',
-			inputs: [
-				{ name: 'value', type: inputType }
-			]
-		} );
-
-		return fnDef;
-
-
-	}
-
-	_constructOneBitsBaseLayout( method, elementType ) {
+		const outputConvertNode = this._returnDataNode( elementType );
 
 		const fnDef = Fn( ( [ value ] ) => {
 
@@ -252,11 +246,13 @@ class BitcountNode extends MathNode {
 			v.assign( v.sub( v.shiftRight( uint( 1 ) ).bitAnd( uint( 0x55555555 ) ) ) );
 			v.assign( v.bitAnd( uint( 0x33333333 ) ).add( v.shiftRight( uint( 2 ) ).bitAnd( uint( 0x33333333 ) ) ) );
 
-			return v.add( v.shiftRight( uint( 4 ) ) ).bitAnd( uint( 0xF0F0F0F ) ).mul( uint( 0x1010101 ) ).shiftRight( uint( 24 ) );
+			const numBits = v.add( v.shiftRight( uint( 4 ) ) ).bitAnd( uint( 0xF0F0F0F ) ).mul( uint( 0x1010101 ) ).shiftRight( uint( 24 ) );
+
+			return outputConvertNode( numBits );
 
 		} ).setLayout( {
 			name: method,
-			type: 'uint',
+			type: elementType,
 			inputs: [
 				{ name: 'value', type: elementType }
 			]
@@ -266,35 +262,47 @@ class BitcountNode extends MathNode {
 
 	}
 
-	_constructOneBitsMainLayout( method, inputType, typeLength, baseFn ) {
+	/**
+	 * Creates and registers a reusable GLSL function that emulates the behavior of the specified bitcount function.
+	 * including considerations for component-wise bitcounts on vector type inputs.
+	 *
+	 * @private
+	 * @param {string} method - The name of the function to create.
+	 * @param {string} inputType - The type of the input value.
+	 * @param {number} typeLength - The vec length of the input value.
+	 * @param {Function} baseFn - The base function that operates on an individual component of the vector.
+	 * @returns {Function} - The alias function for the specified bitcount method.
+	 */
+	_createMainLayout( method, inputType, typeLength, baseFn ) {
+
+		const outputConvertNode = this._returnDataNode( inputType );
 
 		const fnDef = Fn( ( [ value ] ) => {
 
-			const v = uint( 0.0 );
-
 			if ( typeLength === 1 ) {
 
-				v.addAssign( baseFn( value ) );
+				return outputConvertNode( baseFn( value ) );
 
 			} else {
 
-				const components = [ 'x', 'y', 'z', 'w' ];
+				const vec = outputConvertNode( 0 );
 
+				const components = [ 'x', 'y', 'z', 'w' ];
 				for ( let i = 0; i < typeLength; i ++ ) {
 
 					const component = components[ i ];
 
-					v.addAssign( baseFn( value[ component ] ) );
+					vec[ component ].assign( baseFn( value[ component ] ) );
 
 				}
 
-			}
+				return vec;
 
-			return v;
+			}
 
 		} ).setLayout( {
 			name: method,
-			type: 'uint',
+			type: inputType,
 			inputs: [
 				{ name: 'value', type: inputType }
 			]
@@ -302,15 +310,8 @@ class BitcountNode extends MathNode {
 
 		return fnDef;
 
-
 	}
 
-	/**
-	 * Constructs a new math node.
-	 *
-	 * @param {NodeBuilder} builder - The method name.
-	 * @return {?Node} The output node.
-	 */
 	setup( builder ) {
 
 		const { method, aNode } = this;
@@ -318,6 +319,8 @@ class BitcountNode extends MathNode {
 		const { renderer } = builder;
 
 		if ( renderer.backend.isWebGPUBackend ) {
+
+			// use built-in WGSL functions for WebGPU
 
 			return super.setup( builder );
 
@@ -339,21 +342,21 @@ class BitcountNode extends MathNode {
 
 				case BitcountNode.COUNT_LEADING_ZEROS: {
 
-					baseFn = this._constructLeadingZerosBaseLayout( baseMethod, elementType );
+					baseFn = this._createLeadingZerosBaseLayout( baseMethod, elementType );
 					break;
 
 				}
 
 				case BitcountNode.COUNT_TRAILING_ZEROS: {
 
-					baseFn = this._constructTrailingZerosBaseLayout( baseMethod, elementType );
+					baseFn = this._createTrailingZerosBaseLayout( baseMethod, elementType );
 					break;
 
 				}
 
 				case BitcountNode.COUNT_ONE_BITS: {
 
-					baseFn = this._constructOneBitsBaseLayout( baseMethod, elementType );
+					baseFn = this._createOneBitsBaseLayout( baseMethod, elementType );
 					break;
 
 				}
@@ -368,31 +371,7 @@ class BitcountNode extends MathNode {
 
 		if ( fn === undefined ) {
 
-			switch ( method ) {
-
-				case BitcountNode.COUNT_LEADING_ZEROS: {
-
-					fn = this._constructLeadingZerosMainLayout( newMethod, inputType, typeLength, baseFn );
-					break;
-
-				}
-
-				case BitcountNode.COUNT_TRAILING_ZEROS: {
-
-					fn = this._constructTrailingZerosMainLayout( newMethod, inputType, typeLength, baseFn );
-					break;
-
-				}
-
-				case BitcountNode.COUNT_ONE_BITS: {
-
-					fn = this._constructOneBitsMainLayout( newMethod, inputType, typeLength, baseFn );
-					break;
-
-				}
-
-			}
-
+			fn = this._createMainLayout( newMethod, inputType, typeLength, baseFn );
 			registeredBitcountFunctions[ newMethod ] = fn;
 
 		}
@@ -452,13 +431,3 @@ export const countLeadingZeros = /*@__PURE__*/ nodeProxyIntent( BitcountNode, Bi
  * @returns {Node}
  */
 export const countOneBits = /*@__PURE__*/ nodeProxyIntent( BitcountNode, BitcountNode.COUNT_ONE_BITS ).setParameterLength( 1 );
-
-// GLSL alias function
-
-export const findLSB = countTrailingZeros;
-export const findMSB = countLeadingZeros;
-export const bitCount = countOneBits;
-
-addMethodChaining( 'countTrailingZeros', countTrailingZeros );
-addMethodChaining( 'countLeadingZeros', countLeadingZeros );
-addMethodChaining( 'countOneBits', countOneBits );
