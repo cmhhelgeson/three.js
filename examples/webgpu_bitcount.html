@@ -234,7 +234,7 @@
 				scene.add( mesh );
 
 				// Create Standard Renderer
-				const renderer = new THREE.WebGPURenderer( { antialias: false, forceWebGL: true } );
+				const renderer = new THREE.WebGPURenderer( { antialias: false, forceWebGL: false } );
 				renderer.setPixelRatio( window.devicePixelRatio );
 				renderer.setSize( window.innerWidth / 3, window.innerHeight );
 
