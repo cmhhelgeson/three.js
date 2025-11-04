@@ -67,7 +67,9 @@
 			const webGLBaseArray = [];
 			const webGPUBaseArray = [];
 
-			for ( let i = 0; i < 2000; i ++ ) {
+			const size = 2000;
+
+			for ( let i = 0; i < size; i ++ ) {
 
 				webGLBaseArray.push( i + 1 );
 				webGPUBaseArray.push( i + 1 );
@@ -112,7 +114,7 @@
 			
 					storageBuffer.element( instanceIndex ).assign( countOneBits( storageBuffer.element( instanceIndex ) ) );
 
-				} )().compute( 32 );
+				} )().compute( size );
 
 				// Create computeInit function
 
@@ -129,17 +131,17 @@
 				renderer.setSize( window.innerWidth / 3, window.innerHeight );
 
 				const actionName = `logBuffer${forceWebGL ? 'GL' : 'GPU'}`;
-			
+
 				functionObj[ actionName ] = async () => {
 
 					if ( forceWebGL ) {
 
-						webGLArrayContainer = new Uint32Array( await renderer.getArrayBufferAsync( storageBuffer.value ) );
+						//webGLArrayContainer = new Uint32Array( await renderer.getArrayBufferAsync( storageBuffer.value ) );
 						console.log( webGLArrayContainer );
 
 					} else {
 
-						webGPUArrayContainer = new Uint32Array( await renderer.getArrayBufferAsync( storageBuffer.value ) );
+						//webGPUArrayContainer = new Uint32Array( await renderer.getArrayBufferAsync( storageBuffer.value ) );
 						console.log( webGPUArrayContainer );
 			
 					}
@@ -158,6 +160,16 @@
 				renderer.setAnimationLoop( animate );
 
 				renderer.computeAsync( computeBuffer );
+
+				if ( forceWebGL ) {
+
+					webGLArrayContainer = new Uint32Array( await renderer.getArrayBufferAsync( storageBuffer.value ) );
+
+				} else {
+
+					webGPUArrayContainer = new Uint32Array( await renderer.getArrayBufferAsync( storageBuffer.value ) );
+			
+				}
 
 				document.body.querySelector( `#bitCount${forceWebGL ? 'GL' : 'GPU'}` ).appendChild( renderer.domElement );
 
