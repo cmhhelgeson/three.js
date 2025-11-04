@@ -79,8 +79,8 @@
 			const webGLTestArray = new Uint32Array( webGLBaseArray );
 			const webGPUTestArray = new Uint32Array( webGPUBaseArray );
 
-			const testBufferWebGL = instancedArray( webGLTestArray, 'uint' );
-			const testBufferWebGPU = instancedArray( webGPUTestArray, 'uint' );
+			const testBufferWebGL = instancedArray( webGLTestArray, 'uint' ).setPBO( true );
+			const testBufferWebGPU = instancedArray( webGPUTestArray, 'uint' ).setPBO( true );
 
 			let webGLArrayContainer = null;
 			let webGPUArrayContainer = null;
