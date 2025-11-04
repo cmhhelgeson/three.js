@@ -80,8 +80,8 @@
 			const testBufferWebGL = instancedArray( webGLTestArray, 'uint' );
 			const testBufferWebGPU = instancedArray( webGPUTestArray, 'uint' );
 
-			const webGLArrayContainer = null;
-			let arary2Container = null;
+			let webGLArrayContainer = null;
+			let webGPUArrayContainer = null;
 
 			const functionObj = {};
 
@@ -134,13 +134,13 @@
 
 					if ( forceWebGL ) {
 
-						array1Container = new Uint32Array( await renderer.getArrayBufferAsync( storageBuffer.value ) );
-						console.log( array1Container );
+						webGLArrayContainer = new Uint32Array( await renderer.getArrayBufferAsync( storageBuffer.value ) );
+						console.log( webGLArrayContainer );
 
 					} else {
 
-						arary2Container = new Uint32Array( await renderer.getArrayBufferAsync( storageBuffer.value ) );
-						console.log( arary2Container );
+						webGPUArrayContainer = new Uint32Array( await renderer.getArrayBufferAsync( storageBuffer.value ) );
+						console.log( webGPUArrayContainer );
 			
 					}
 
@@ -177,13 +177,13 @@
 
 			functionObj.compareBuffers = () => {
 
-				for ( let i = 0; i < array1Container.length; i ++ ) {
+				for ( let i = 0; i < webGLArrayContainer.length; i ++ ) {
 
-					if ( array1Container[ i ] !== arary2Container[ i ] ) {
+					if ( webGLArrayContainer[ i ] !== webGPUArrayContainer[ i ] ) {
 
 						console.log( `Index ${i} is incorrect` );
-						console.log( `WebGL value for ${i + 1} is ${array1Container[ i ]}` );
-						console.log( `WebGPU value for ${i + 1} is ${arary2Container[ i ]}` );
+						console.log( `WebGL value for ${i + 1} is ${webGLArrayContainer[ i ]}` );
+						console.log( `WebGPU value for ${i + 1} is ${webGPUArrayContainer[ i ]}` );
 
 					}
 			
