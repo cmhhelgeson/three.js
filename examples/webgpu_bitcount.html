@@ -61,7 +61,10 @@
 		<script type="module">
 
 			import * as THREE from 'three/webgpu';
-			import { Fn, instancedArray, countTrailingZeros, countLeadingZeros, bitCount, instanceIndex, uint, uv, uvec2, vec2, floor, float, If, vec3 } from 'three/tsl';
+			import { Fn, instancedArray, countTrailingZeros, countLeadingZeros, countOneBits, instanceIndex, uint, uv, uvec2, vec2, floor, float, If, vec3 } from 'three/tsl';
+
+			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+
 
 			const COUNT_TRAILING_ZEROS = 'countTrailingZeros';
 			const COUNT_LEADING_ZEROS = 'countLeadingZeros';
@@ -94,6 +97,8 @@
 				16777215, 33554431, 67108863, 134217727, 268435455,
 				536870911, 1073741823, 2147483647, 0
 			] );
+
+			const gui = new GUI();
 			
 			async function init( algoType ) {
 
@@ -162,6 +167,8 @@
 
 				} else {
 
+					usedTSL = countOneBits;
+
 					validationMethod = ( value, index, baseColor ) => {
 
 						const color = vec3( 0.0, 0.0, 0.0 );
@@ -179,8 +186,6 @@
 						return color;
 
 					};
-
-					usedTSL = bitCount;
 
 				}
 
@@ -232,6 +237,19 @@
 				const renderer = new THREE.WebGPURenderer( { antialias: false, forceWebGL: true } );
 				renderer.setPixelRatio( window.devicePixelRatio );
 				renderer.setSize( window.innerWidth / 3, window.innerHeight );
+
+				const functionObj = {};
+
+
+				functionObj.logBuffer = async () => {
+
+					console.log( new Uint32Array( await renderer.getArrayBufferAsync( storageBuffer.value ) ) );
+			
+				};
+
+				gui.add( functionObj, 'logBuffer' ).name( `Log ${algoType}` );
+			
+
 
 				const animate = () => {
 
