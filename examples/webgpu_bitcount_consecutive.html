@@ -114,7 +114,9 @@
 			
 					storageBuffer.element( instanceIndex ).assign( countOneBits( storageBuffer.element( instanceIndex ) ) );
 
-				} )().compute( size );
+				} )().compute( size, [ 64, 1, 1 ] );
+
+				const numWorkgroups = Math.ceil( size / 64 );
 
 				// Create computeInit function
 
@@ -136,12 +138,12 @@
 
 					if ( forceWebGL ) {
 
-						//webGLArrayContainer = new Uint32Array( await renderer.getArrayBufferAsync( storageBuffer.value ) );
+						webGLArrayContainer = new Uint32Array( await renderer.getArrayBufferAsync( storageBuffer.value ) );
 						console.log( webGLArrayContainer );
 
 					} else {
 
-						//webGPUArrayContainer = new Uint32Array( await renderer.getArrayBufferAsync( storageBuffer.value ) );
+						webGPUArrayContainer = new Uint32Array( await renderer.getArrayBufferAsync( storageBuffer.value ) );
 						console.log( webGPUArrayContainer );
 			
 					}
@@ -159,9 +161,9 @@
 
 				renderer.setAnimationLoop( animate );
 
-				renderer.computeAsync( computeBuffer );
+				renderer.compute( computeBuffer );
 
-				if ( forceWebGL ) {
+				/*if ( forceWebGL ) {
 
 					webGLArrayContainer = new Uint32Array( await renderer.getArrayBufferAsync( storageBuffer.value ) );
 
@@ -169,7 +171,7 @@
 
 					webGPUArrayContainer = new Uint32Array( await renderer.getArrayBufferAsync( storageBuffer.value ) );
 			
-				}
+				} */
 
 				document.body.querySelector( `#bitCount${forceWebGL ? 'GL' : 'GPU'}` ).appendChild( renderer.domElement );
 
