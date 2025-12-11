@@ -26,40 +26,40 @@ import { warnOnce, error } from '../../utils.js';
 class WebGPUBackend extends Backend {
 
 	/**
-	 * WebGPUBackend options.
-	 *
-	 * @typedef {Object} WebGPUBackend~Options
-	 * @property {boolean} [logarithmicDepthBuffer=false] - Whether logarithmic depth buffer is enabled or not.
-	 * @property {boolean} [alpha=true] - Whether the default framebuffer (which represents the final contents of the canvas) should be transparent or opaque.
-	 * @property {boolean} [compatibilityMode=false] - Whether the backend should be in compatibility mode or not.
-	 * @property {boolean} [depth=true] - Whether the default framebuffer should have a depth buffer or not.
-	 * @property {boolean} [stencil=false] - Whether the default framebuffer should have a stencil buffer or not.
-	 * @property {boolean} [antialias=false] - Whether MSAA as the default anti-aliasing should be enabled or not.
-	 * @property {number} [samples=0] - When `antialias` is `true`, `4` samples are used by default. Set this parameter to any other integer value than 0 to overwrite the default.
-	 * @property {boolean} [forceWebGL=false] - If set to `true`, the renderer uses a WebGL 2 backend no matter if WebGPU is supported or not.
-	 * @property {boolean} [trackTimestamp=false] - Whether to track timestamps with a Timestamp Query API or not.
-	 * @property {string} [powerPreference=undefined] - The power preference.
-	 * @property {Object} [requiredLimits=undefined] - Specifies the limits that are required by the device request. The request will fail if the adapter cannot provide these limits.
-	 * @property {GPUDevice} [device=undefined] - If there is an existing GPU device on app level, it can be passed to the renderer as a parameter.
-	 * @property {number} [outputType=undefined] - Texture type for output to canvas. By default, device's preferred format is used; other formats may incur overhead.
-	 */
+* WebGPUBackend options.
+*
+* @typedef {Object} WebGPUBackend~Options
+* @property {boolean} [logarithmicDepthBuffer=false] - Whether logarithmic depth buffer is enabled or not.
+* @property {boolean} [alpha=true] - Whether the default framebuffer (which represents the final contents of the canvas) should be transparent or opaque.
+* @property {boolean} [compatibilityMode=false] - Whether the backend should be in compatibility mode or not.
+* @property {boolean} [depth=true] - Whether the default framebuffer should have a depth buffer or not.
+* @property {boolean} [stencil=false] - Whether the default framebuffer should have a stencil buffer or not.
+* @property {boolean} [antialias=false] - Whether MSAA as the default anti-aliasing should be enabled or not.
+* @property {number} [samples=0] - When `antialias` is `true`, `4` samples are used by default. Set this parameter to any other integer value than 0 to overwrite the default.
+* @property {boolean} [forceWebGL=false] - If set to `true`, the renderer uses a WebGL 2 backend no matter if WebGPU is supported or not.
+* @property {boolean} [trackTimestamp=false] - Whether to track timestamps with a Timestamp Query API or not.
+* @property {string} [powerPreference=undefined] - The power preference.
+* @property {Object} [requiredLimits=undefined] - Specifies the limits that are required by the device request. The request will fail if the adapter cannot provide these limits.
+* @property {GPUDevice} [device=undefined] - If there is an existing GPU device on app level, it can be passed to the renderer as a parameter.
+* @property {number} [outputType=undefined] - Texture type for output to canvas. By default, device's preferred format is used; other formats may incur overhead.
+*/
 
 	/**
-	 * Constructs a new WebGPU backend.
-	 *
-	 * @param {WebGPUBackend~Options} [parameters] - The configuration parameter.
-	 */
+* Constructs a new WebGPU backend.
+*
+* @param {WebGPUBackend~Options} [parameters] - The configuration parameter.
+*/
 	constructor( parameters = {} ) {
 
 		super( parameters );
 
 		/**
-		 * This flag can be used for type testing.
-		 *
-		 * @type {boolean}
-		 * @readonly
-		 * @default true
-		 */
+* This flag can be used for type testing.
+*
+* @type {boolean}
+* @readonly
+* @default true
+*/
 		this.isWebGPUBackend = true;
 
 		// some parameters require default values other than "undefined"
@@ -69,83 +69,83 @@ class WebGPUBackend extends Backend {
 		this.parameters.requiredLimits = ( parameters.requiredLimits === undefined ) ? {} : parameters.requiredLimits;
 
 		/**
-		 * Indicates whether the backend is in compatibility mode or not.
-		 * @type {boolean}
-		 * @default false
-		 */
+* Indicates whether the backend is in compatibility mode or not.
+* @type {boolean}
+* @default false
+*/
 		this.compatibilityMode = this.parameters.compatibilityMode;
 
 		/**
-		 * A reference to the device.
-		 *
-		 * @type {?GPUDevice}
-		 * @default null
-		 */
+* A reference to the device.
+*
+* @type {?GPUDevice}
+* @default null
+*/
 		this.device = null;
 
 		/**
-		 * A reference to the default render pass descriptor.
-		 *
-		 * @type {?Object}
-		 * @default null
-		 */
+* A reference to the default render pass descriptor.
+*
+* @type {?Object}
+* @default null
+*/
 		this.defaultRenderPassdescriptor = null;
 
 		/**
-		 * A reference to a backend module holding common utility functions.
-		 *
-		 * @type {WebGPUUtils}
-		 */
+* A reference to a backend module holding common utility functions.
+*
+* @type {WebGPUUtils}
+*/
 		this.utils = new WebGPUUtils( this );
 
 		/**
-		 * A reference to a backend module holding shader attribute-related
-		 * utility functions.
-		 *
-		 * @type {WebGPUAttributeUtils}
-		 */
+* A reference to a backend module holding shader attribute-related
+* utility functions.
+*
+* @type {WebGPUAttributeUtils}
+*/
 		this.attributeUtils = new WebGPUAttributeUtils( this );
 
 		/**
-		 * A reference to a backend module holding shader binding-related
-		 * utility functions.
-		 *
-		 * @type {WebGPUBindingUtils}
-		 */
+* A reference to a backend module holding shader binding-related
+* utility functions.
+*
+* @type {WebGPUBindingUtils}
+*/
 		this.bindingUtils = new WebGPUBindingUtils( this );
 
 		/**
-		 * A reference to a backend module holding shader pipeline-related
-		 * utility functions.
-		 *
-		 * @type {WebGPUPipelineUtils}
-		 */
+* A reference to a backend module holding shader pipeline-related
+* utility functions.
+*
+* @type {WebGPUPipelineUtils}
+*/
 		this.pipelineUtils = new WebGPUPipelineUtils( this );
 
 		/**
-		 * A reference to a backend module holding shader texture-related
-		 * utility functions.
-		 *
-		 * @type {WebGPUTextureUtils}
-		 */
+* A reference to a backend module holding shader texture-related
+* utility functions.
+*
+* @type {WebGPUTextureUtils}
+*/
 		this.textureUtils = new WebGPUTextureUtils( this );
 
 		/**
-		 * A map that manages the resolve buffers for occlusion queries.
-		 *
-		 * @type {Map<number,GPUBuffer>}
-		 */
+* A map that manages the resolve buffers for occlusion queries.
+*
+* @type {Map<number,GPUBuffer>}
+*/
 		this.occludedResolveCache = new Map();
 
 	}
 
 	/**
-	 * Initializes the backend so it is ready for usage.
-	 *
-	 * @async
-	 * @param {Renderer} renderer - The renderer.
-	 * @return {Promise} A Promise that resolves when the backend has been initialized.
-	 */
+* Initializes the backend so it is ready for usage.
+*
+* @async
+* @param {Renderer} renderer - The renderer.
+* @return {Promise} A Promise that resolves when the backend has been initialized.
+*/
 	async init( renderer ) {
 
 		await super.init( renderer );
@@ -226,11 +226,11 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * A reference to the context.
-	 *
-	 * @type {?GPUCanvasContext}
-	 * @default null
-	 */
+* A reference to the context.
+*
+* @type {?GPUCanvasContext}
+* @default null
+*/
 	get context() {
 
 		const canvasTarget = this.renderer.getCanvasTarget();
@@ -278,11 +278,11 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * The coordinate system of the backend.
-	 *
-	 * @type {number}
-	 * @readonly
-	 */
+* The coordinate system of the backend.
+*
+* @type {number}
+* @readonly
+*/
 	get coordinateSystem() {
 
 		return WebGPUCoordinateSystem;
@@ -290,13 +290,13 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * This method performs a readback operation by moving buffer data from
-	 * a storage buffer attribute from the GPU to the CPU.
-	 *
-	 * @async
-	 * @param {StorageBufferAttribute} attribute - The storage buffer attribute.
-	 * @return {Promise<ArrayBuffer>} A promise that resolves with the buffer data when the data are ready.
-	 */
+* This method performs a readback operation by moving buffer data from
+* a storage buffer attribute from the GPU to the CPU.
+*
+* @async
+* @param {StorageBufferAttribute} attribute - The storage buffer attribute.
+* @return {Promise<ArrayBuffer>} A promise that resolves with the buffer data when the data are ready.
+*/
 	async getArrayBufferAsync( attribute ) {
 
 		return await this.attributeUtils.getArrayBufferAsync( attribute );
@@ -304,10 +304,10 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Returns the backend's rendering context.
-	 *
-	 * @return {GPUCanvasContext} The rendering context.
-	 */
+* Returns the backend's rendering context.
+*
+* @return {GPUCanvasContext} The rendering context.
+*/
 	getContext() {
 
 		return this.context;
@@ -315,15 +315,15 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Returns the default render pass descriptor.
-	 *
-	 * In WebGPU, the default framebuffer must be configured
-	 * like custom framebuffers so the backend needs a render
-	 * pass descriptor even when rendering directly to screen.
-	 *
-	 * @private
-	 * @return {Object} The render pass descriptor.
-	 */
+* Returns the default render pass descriptor.
+*
+* In WebGPU, the default framebuffer must be configured
+* like custom framebuffers so the backend needs a render
+* pass descriptor even when rendering directly to screen.
+*
+* @private
+* @return {Object} The render pass descriptor.
+*/
 	_getDefaultRenderPassDescriptor() {
 
 		const renderer = this.renderer;
@@ -383,13 +383,13 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Internal to determine if the current render target is a render target array with depth 2D array texture.
-	 *
-	 * @param {RenderContext} renderContext - The render context.
-	 * @return {boolean} Whether the render target is a render target array with depth 2D array texture.
-	 *
-	 * @private
-	 */
+* Internal to determine if the current render target is a render target array with depth 2D array texture.
+*
+* @param {RenderContext} renderContext - The render context.
+* @return {boolean} Whether the render target is a render target array with depth 2D array texture.
+*
+* @private
+*/
 	_isRenderCameraDepthArray( renderContext ) {
 
 		return renderContext.depthTexture && renderContext.depthTexture.image.depth > 1 && renderContext.camera.isArrayCamera;
@@ -397,13 +397,13 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Returns the render pass descriptor for the given render context.
-	 *
-	 * @private
-	 * @param {RenderContext} renderContext - The render context.
-	 * @param {Object} colorAttachmentsConfig - Configuration object for the color attachments.
-	 * @return {Object} The render pass descriptor.
-	 */
+* Returns the render pass descriptor for the given render context.
+*
+* @private
+* @param {RenderContext} renderContext - The render context.
+* @param {Object} colorAttachmentsConfig - Configuration object for the color attachments.
+* @return {Object} The render pass descriptor.
+*/
 	_getRenderPassDescriptor( renderContext, colorAttachmentsConfig = {} ) {
 
 		const renderTarget = renderContext.renderTarget;
@@ -412,9 +412,9 @@ class WebGPUBackend extends Backend {
 		let descriptors = renderTargetData.descriptors;
 
 		if ( descriptors === undefined ||
-			renderTargetData.width !== renderTarget.width ||
-			renderTargetData.height !== renderTarget.height ||
-			renderTargetData.samples !== renderTarget.samples
+renderTargetData.width !== renderTarget.width ||
+renderTargetData.height !== renderTarget.height ||
+renderTargetData.samples !== renderTarget.samples
 		) {
 
 			descriptors = {};
@@ -583,11 +583,11 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * This method is executed at the beginning of a render call and prepares
-	 * the WebGPU state for upcoming render calls
-	 *
-	 * @param {RenderContext} renderContext - The render context.
-	 */
+* This method is executed at the beginning of a render call and prepares
+* the WebGPU state for upcoming render calls
+*
+* @param {RenderContext} renderContext - The render context.
+*/
 	beginRender( renderContext ) {
 
 		const renderContextData = this.get( renderContext );
@@ -634,6 +634,8 @@ class WebGPUBackend extends Backend {
 
 		}
 
+		descriptor.label = `render_descriptor_${renderContext.id}`;
+
 		this.initTimestampQuery( TimestampQuery.RENDER, this.getTimestampUID( renderContext ), descriptor );
 
 		descriptor.occlusionQuerySet = occlusionQuerySet;
@@ -678,7 +680,7 @@ class WebGPUBackend extends Backend {
 
 			}
 
-		  	colorAttachment.storeOp = GPUStoreOp.Store;
+			colorAttachment.storeOp = GPUStoreOp.Store;
 
 		}
 
@@ -697,13 +699,13 @@ class WebGPUBackend extends Backend {
 
 			}
 
-		  depthStencilAttachment.depthStoreOp = GPUStoreOp.Store;
+			depthStencilAttachment.depthStoreOp = GPUStoreOp.Store;
 
 		}
 
 		if ( renderContext.stencil ) {
 
-		  if ( renderContext.clearStencil ) {
+			if ( renderContext.clearStencil ) {
 
 				depthStencilAttachment.stencilClearValue = renderContext.clearStencilValue;
 				depthStencilAttachment.stencilLoadOp = GPULoadOp.Clear;
@@ -714,7 +716,7 @@ class WebGPUBackend extends Backend {
 
 			}
 
-		  depthStencilAttachment.stencilStoreOp = GPUStoreOp.Store;
+			depthStencilAttachment.stencilStoreOp = GPUStoreOp.Store;
 
 		}
 
@@ -795,16 +797,16 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * This method creates layer descriptors for each camera in an array camera
-	 * to prepare for rendering to a depth array texture.
-	 *
-	 * @param {RenderContext} renderContext - The render context.
-	 * @param {Object} renderContextData - The render context data.
-	 * @param {Object} descriptor  - The render pass descriptor.
-	 * @param {ArrayCamera} cameras - The array camera.
-	 *
-	 * @private
-	 */
+* This method creates layer descriptors for each camera in an array camera
+* to prepare for rendering to a depth array texture.
+*
+* @param {RenderContext} renderContext - The render context.
+* @param {Object} renderContextData - The render context data.
+* @param {Object} descriptor  - The render pass descriptor.
+* @param {ArrayCamera} cameras - The array camera.
+*
+* @private
+*/
 	_createDepthLayerDescriptors( renderContext, renderContextData, descriptor, cameras ) {
 
 		const depthStencilAttachment = descriptor.depthStencilAttachment;
@@ -869,14 +871,14 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * This method updates the layer descriptors for each camera in an array camera
-	 * to prepare for rendering to a depth array texture.
-	 *
-	 * @param {RenderContext} renderContext - The render context.
-	 * @param {Object} renderContextData - The render context data.
-	 * @param {ArrayCamera} cameras - The array camera.
-	 *
-	 */
+* This method updates the layer descriptors for each camera in an array camera
+* to prepare for rendering to a depth array texture.
+*
+* @param {RenderContext} renderContext - The render context.
+* @param {Object} renderContextData - The render context data.
+* @param {ArrayCamera} cameras - The array camera.
+*
+*/
 	_updateDepthLayerDescriptors( renderContext, renderContextData, cameras ) {
 
 		for ( let i = 0; i < cameras.length; i ++ ) {
@@ -924,11 +926,11 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * This method is executed at the end of a render call and finalizes work
-	 * after draw calls.
-	 *
-	 * @param {RenderContext} renderContext - The render context.
-	 */
+* This method is executed at the end of a render call and finalizes work
+* after draw calls.
+*
+* @param {RenderContext} renderContext - The render context.
+*/
 	finishRender( renderContext ) {
 
 		const renderContextData = this.get( renderContext );
@@ -952,16 +954,16 @@ class WebGPUBackend extends Backend {
 
 		if ( this._isRenderCameraDepthArray( renderContext ) === true ) {
 
-		  const bundles = [];
+			const bundles = [];
 
-		  for ( let i = 0; i < renderContextData.bundleEncoders.length; i ++ ) {
+			for ( let i = 0; i < renderContextData.bundleEncoders.length; i ++ ) {
 
 				const bundleEncoder = renderContextData.bundleEncoders[ i ];
 				bundles.push( bundleEncoder.finish() );
 
 			}
 
-		  for ( let i = 0; i < renderContextData.layerDescriptors.length; i ++ ) {
+			for ( let i = 0; i < renderContextData.layerDescriptors.length; i ++ ) {
 
 				if ( i < bundles.length ) {
 
@@ -992,7 +994,9 @@ class WebGPUBackend extends Backend {
 
 		} else if ( renderContextData.currentPass ) {
 
-		  renderContextData.currentPass.end();
+			renderContextData.currentPass.end();
+
+			this.pipelineUtils.setPipeline( renderContextData.descriptor );
 
 		}
 
@@ -1064,13 +1068,13 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Returns `true` if the given 3D object is fully occluded by other
-	 * 3D objects in the scene.
-	 *
-	 * @param {RenderContext} renderContext - The render context.
-	 * @param {Object3D} object - The 3D object to test.
-	 * @return {boolean} Whether the 3D object is fully occluded or not.
-	 */
+* Returns `true` if the given 3D object is fully occluded by other
+* 3D objects in the scene.
+*
+* @param {RenderContext} renderContext - The render context.
+* @param {Object3D} object - The 3D object to test.
+* @return {boolean} Whether the 3D object is fully occluded or not.
+*/
 	isOccluded( renderContext, object ) {
 
 		const renderContextData = this.get( renderContext );
@@ -1080,13 +1084,13 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * This method processes the result of occlusion queries and writes it
-	 * into render context data.
-	 *
-	 * @async
-	 * @param {RenderContext} renderContext - The render context.
-	 * @return {Promise} A Promise that resolves when the occlusion query results have been processed.
-	 */
+* This method processes the result of occlusion queries and writes it
+* into render context data.
+*
+* @async
+* @param {RenderContext} renderContext - The render context.
+* @return {Promise} A Promise that resolves when the occlusion query results have been processed.
+*/
 	async resolveOccludedAsync( renderContext ) {
 
 		const renderContextData = this.get( renderContext );
@@ -1126,10 +1130,10 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Updates the viewport with the values from the given render context.
-	 *
-	 * @param {RenderContext} renderContext - The render context.
-	 */
+* Updates the viewport with the values from the given render context.
+*
+* @param {RenderContext} renderContext - The render context.
+*/
 	updateViewport( renderContext ) {
 
 		const { currentPass } = this.get( renderContext );
@@ -1140,10 +1144,10 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Updates the scissor with the values from the given render context.
-	 *
-	 * @param {RenderContext} renderContext - The render context.
-	 */
+* Updates the scissor with the values from the given render context.
+*
+* @param {RenderContext} renderContext - The render context.
+*/
 	updateScissor( renderContext ) {
 
 		const { currentPass } = this.get( renderContext );
@@ -1154,11 +1158,11 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Returns the clear color and alpha into a single
-	 * color object.
-	 *
-	 * @return {Color4} The clear color.
-	 */
+* Returns the clear color and alpha into a single
+* color object.
+*
+* @return {Color4} The clear color.
+*/
 	getClearColor() {
 
 		const clearColor = super.getClearColor();
@@ -1178,13 +1182,13 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Performs a clear operation.
-	 *
-	 * @param {boolean} color - Whether the color buffer should be cleared or not.
-	 * @param {boolean} depth - Whether the depth buffer should be cleared or not.
-	 * @param {boolean} stencil - Whether the stencil buffer should be cleared or not.
-	 * @param {?RenderContext} [renderTargetContext=null] - The render context of the current set render target.
-	 */
+* Performs a clear operation.
+*
+* @param {boolean} color - Whether the color buffer should be cleared or not.
+* @param {boolean} depth - Whether the depth buffer should be cleared or not.
+* @param {boolean} stencil - Whether the stencil buffer should be cleared or not.
+* @param {?RenderContext} [renderTargetContext=null] - The render context of the current set render target.
+*/
 	clear( color, depth, stencil, renderTargetContext = null ) {
 
 		const device = this.device;
@@ -1315,11 +1319,11 @@ class WebGPUBackend extends Backend {
 	// compute
 
 	/**
-	 * This method is executed at the beginning of a compute call and
-	 * prepares the state for upcoming compute tasks.
-	 *
-	 * @param {Node|Array<Node>} computeGroup - The compute node(s).
-	 */
+* This method is executed at the beginning of a compute call and
+* prepares the state for upcoming compute tasks.
+*
+* @param {Node|Array<Node>} computeGroup - The compute node(s).
+*/
 	beginCompute( computeGroup ) {
 
 		const groupGPU = this.get( computeGroup );
@@ -1335,31 +1339,32 @@ class WebGPUBackend extends Backend {
 		groupGPU.cmdEncoderGPU = this.device.createCommandEncoder( { label: 'computeGroup_' + computeGroup.id } );
 
 		groupGPU.passEncoderGPU = groupGPU.cmdEncoderGPU.beginComputePass( descriptor );
+		groupGPU.passEncoderDescriptor = descriptor;
 
 	}
 
 	/**
-	 * Executes a compute command for the given compute node.
-	 *
-	 * @param {Node|Array<Node>} computeGroup - The group of compute nodes of a compute call. Can be a single compute node.
-	 * @param {Node} computeNode - The compute node.
-	 * @param {Array<BindGroup>} bindings - The bindings.
-	 * @param {ComputePipeline} pipeline - The compute pipeline.
-	 * @param {number|Array<number>|IndirectStorageBufferAttribute} [dispatchSize=null]
-	 * - A single number representing count, or
-	 * - An array [x, y, z] representing dispatch size, or
-	 * - A IndirectStorageBufferAttribute for indirect dispatch size.
-	 */
+* Executes a compute command for the given compute node.
+*
+* @param {Node|Array<Node>} computeGroup - The group of compute nodes of a compute call. Can be a single compute node.
+* @param {Node} computeNode - The compute node.
+* @param {Array<BindGroup>} bindings - The bindings.
+* @param {ComputePipeline} pipeline - The compute pipeline.
+* @param {number|Array<number>|IndirectStorageBufferAttribute} [dispatchSize=null]
+* - A single number representing count, or
+* - An array [x, y, z] representing dispatch size, or
+* - A IndirectStorageBufferAttribute for indirect dispatch size.
+*/
 	compute( computeGroup, computeNode, bindings, pipeline, dispatchSize = null ) {
 
 		const computeNodeData = this.get( computeNode );
-		const { passEncoderGPU } = this.get( computeGroup );
+		const { passEncoderGPU, passEncoderDescriptor } = this.get( computeGroup );
 
 		// pipeline
 
 		const pipelineGPU = this.get( pipeline ).pipeline;
 
-		this.pipelineUtils.setPipeline( passEncoderGPU, pipelineGPU );
+		this.pipelineUtils.setPipeline( passEncoderDescriptor, pipelineGPU, passEncoderGPU );
 
 		// bind groups
 
@@ -1444,16 +1449,17 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * This method is executed at the end of a compute call and
-	 * finalizes work after compute tasks.
-	 *
-	 * @param {Node|Array<Node>} computeGroup - The compute node(s).
-	 */
+* This method is executed at the end of a compute call and
+* finalizes work after compute tasks.
+*
+* @param {Node|Array<Node>} computeGroup - The compute node(s).
+*/
 	finishCompute( computeGroup ) {
 
 		const groupData = this.get( computeGroup );
 
 		groupData.passEncoderGPU.end();
+		this.pipelineUtils.setPipeline( groupData.passEncoderDescriptor );
 
 		this.device.queue.submit( [ groupData.cmdEncoderGPU.finish() ] );
 
@@ -1462,11 +1468,11 @@ class WebGPUBackend extends Backend {
 	// render object
 
 	/**
-	 * Executes a draw command for the given render object.
-	 *
-	 * @param {RenderObject} renderObject - The render object to draw.
-	 * @param {Info} info - Holds a series of statistical information about the GPU memory and the rendering process.
-	 */
+* Executes a draw command for the given render object.
+*
+* @param {RenderObject} renderObject - The render object to draw.
+* @param {Info} info - Holds a series of statistical information about the GPU memory and the rendering process.
+*/
 	draw( renderObject, info ) {
 
 		const { object, material, context, pipeline } = renderObject;
@@ -1486,10 +1492,10 @@ class WebGPUBackend extends Backend {
 
 		// pipeline
 
-		const setPipelineAndBindings = ( passEncoderGPU, currentSets ) => {
+		const setPipelineAndBindings = ( passEncoderGPU, passEncoderDescriptor, currentSets ) => {
 
 			// pipeline
-			this.pipelineUtils.setPipeline( passEncoderGPU, pipelineGPU );
+			this.pipelineUtils.setPipeline( passEncoderDescriptor, pipelineGPU, passEncoderGPU );
 			currentSets.pipeline = pipelineGPU;
 
 			// bind groups
@@ -1556,9 +1562,9 @@ class WebGPUBackend extends Backend {
 		};
 
 		// Define draw function
-		const draw = ( passEncoderGPU, currentSets ) => {
+		const draw = ( passEncoderGPU, passEncoderDescriptor, currentSets ) => {
 
-			setPipelineAndBindings( passEncoderGPU, currentSets );
+			setPipelineAndBindings( passEncoderGPU, passEncoderDescriptor, currentSets );
 
 			if ( object.isBatchedMesh === true ) {
 
@@ -1764,7 +1770,7 @@ class WebGPUBackend extends Backend {
 
 				}
 
-				draw( renderContextData.currentPass, renderContextData.currentSets );
+				draw( renderContextData.currentPass, renderContextData.descriptor, renderContextData.currentSets );
 
 			}
 
@@ -1775,11 +1781,11 @@ class WebGPUBackend extends Backend {
 	// cache key
 
 	/**
-	 * Returns `true` if the render pipeline requires an update.
-	 *
-	 * @param {RenderObject} renderObject - The render object.
-	 * @return {boolean} Whether the render pipeline requires an update or not.
-	 */
+* Returns `true` if the render pipeline requires an update.
+*
+* @param {RenderObject} renderObject - The render object.
+* @return {boolean} Whether the render pipeline requires an update or not.
+*/
 	needsRenderUpdate( renderObject ) {
 
 		const data = this.get( renderObject );
@@ -1797,18 +1803,18 @@ class WebGPUBackend extends Backend {
 		let needsUpdate = false;
 
 		if ( data.material !== material || data.materialVersion !== material.version ||
-			data.transparent !== material.transparent || data.blending !== material.blending || data.premultipliedAlpha !== material.premultipliedAlpha ||
-			data.blendSrc !== material.blendSrc || data.blendDst !== material.blendDst || data.blendEquation !== material.blendEquation ||
-			data.blendSrcAlpha !== material.blendSrcAlpha || data.blendDstAlpha !== material.blendDstAlpha || data.blendEquationAlpha !== material.blendEquationAlpha ||
-			data.colorWrite !== material.colorWrite || data.depthWrite !== material.depthWrite || data.depthTest !== material.depthTest || data.depthFunc !== material.depthFunc ||
-			data.stencilWrite !== material.stencilWrite || data.stencilFunc !== material.stencilFunc ||
-			data.stencilFail !== material.stencilFail || data.stencilZFail !== material.stencilZFail || data.stencilZPass !== material.stencilZPass ||
-			data.stencilFuncMask !== material.stencilFuncMask || data.stencilWriteMask !== material.stencilWriteMask ||
-			data.side !== material.side || data.alphaToCoverage !== material.alphaToCoverage ||
-			data.sampleCount !== sampleCount || data.colorSpace !== colorSpace ||
-			data.colorFormat !== colorFormat || data.depthStencilFormat !== depthStencilFormat ||
-			data.primitiveTopology !== primitiveTopology ||
-			data.clippingContextCacheKey !== renderObject.clippingContextCacheKey
+data.transparent !== material.transparent || data.blending !== material.blending || data.premultipliedAlpha !== material.premultipliedAlpha ||
+data.blendSrc !== material.blendSrc || data.blendDst !== material.blendDst || data.blendEquation !== material.blendEquation ||
+data.blendSrcAlpha !== material.blendSrcAlpha || data.blendDstAlpha !== material.blendDstAlpha || data.blendEquationAlpha !== material.blendEquationAlpha ||
+data.colorWrite !== material.colorWrite || data.depthWrite !== material.depthWrite || data.depthTest !== material.depthTest || data.depthFunc !== material.depthFunc ||
+data.stencilWrite !== material.stencilWrite || data.stencilFunc !== material.stencilFunc ||
+data.stencilFail !== material.stencilFail || data.stencilZFail !== material.stencilZFail || data.stencilZPass !== material.stencilZPass ||
+data.stencilFuncMask !== material.stencilFuncMask || data.stencilWriteMask !== material.stencilWriteMask ||
+data.side !== material.side || data.alphaToCoverage !== material.alphaToCoverage ||
+data.sampleCount !== sampleCount || data.colorSpace !== colorSpace ||
+data.colorFormat !== colorFormat || data.depthStencilFormat !== depthStencilFormat ||
+data.primitiveTopology !== primitiveTopology ||
+data.clippingContextCacheKey !== renderObject.clippingContextCacheKey
 		) {
 
 			data.material = material; data.materialVersion = material.version;
@@ -1837,11 +1843,11 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Returns a cache key that is used to identify render pipelines.
-	 *
-	 * @param {RenderObject} renderObject - The render object.
-	 * @return {string} The cache key.
-	 */
+* Returns a cache key that is used to identify render pipelines.
+*
+* @param {RenderObject} renderObject - The render object.
+* @return {string} The cache key.
+*/
 	getRenderCacheKey( renderObject ) {
 
 		const { object, material } = renderObject;
@@ -1877,11 +1883,11 @@ class WebGPUBackend extends Backend {
 	// textures
 
 	/**
-	 * Updates a GPU sampler for the given texture.
-	 *
-	 * @param {Texture} texture - The texture to update the sampler for.
-	 * @return {string} The current sampler key.
-	 */
+* Updates a GPU sampler for the given texture.
+*
+* @param {Texture} texture - The texture to update the sampler for.
+* @return {string} The current sampler key.
+*/
 	updateSampler( texture ) {
 
 		return this.textureUtils.updateSampler( texture );
@@ -1889,12 +1895,12 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Creates a default texture for the given texture that can be used
-	 * as a placeholder until the actual texture is ready for usage.
-	 *
-	 * @param {Texture} texture - The texture to create a default texture for.
-	 * @return {boolean} Whether the sampler has been updated or not.
-	 */
+* Creates a default texture for the given texture that can be used
+* as a placeholder until the actual texture is ready for usage.
+*
+* @param {Texture} texture - The texture to create a default texture for.
+* @return {boolean} Whether the sampler has been updated or not.
+*/
 	createDefaultTexture( texture ) {
 
 		return this.textureUtils.createDefaultTexture( texture );
@@ -1902,11 +1908,11 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Defines a texture on the GPU for the given texture object.
-	 *
-	 * @param {Texture} texture - The texture.
-	 * @param {Object} [options={}] - Optional configuration parameter.
-	 */
+* Defines a texture on the GPU for the given texture object.
+*
+* @param {Texture} texture - The texture.
+* @param {Object} [options={}] - Optional configuration parameter.
+*/
 	createTexture( texture, options ) {
 
 		this.textureUtils.createTexture( texture, options );
@@ -1914,11 +1920,11 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Uploads the updated texture data to the GPU.
-	 *
-	 * @param {Texture} texture - The texture.
-	 * @param {Object} [options={}] - Optional configuration parameter.
-	 */
+* Uploads the updated texture data to the GPU.
+*
+* @param {Texture} texture - The texture.
+* @param {Object} [options={}] - Optional configuration parameter.
+*/
 	updateTexture( texture, options ) {
 
 		this.textureUtils.updateTexture( texture, options );
@@ -1926,10 +1932,10 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Generates mipmaps for the given texture.
-	 *
-	 * @param {Texture} texture - The texture.
-	 */
+* Generates mipmaps for the given texture.
+*
+* @param {Texture} texture - The texture.
+*/
 	generateMipmaps( texture ) {
 
 		this.textureUtils.generateMipmaps( texture );
@@ -1937,11 +1943,11 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Destroys the GPU data for the given texture object.
-	 *
-	 * @param {Texture} texture - The texture.
-	 * @param {boolean} [isDefaultTexture=false] - Whether the texture uses a default GPU texture or not.
-	 */
+* Destroys the GPU data for the given texture object.
+*
+* @param {Texture} texture - The texture.
+* @param {boolean} [isDefaultTexture=false] - Whether the texture uses a default GPU texture or not.
+*/
 	destroyTexture( texture, isDefaultTexture = false ) {
 
 		this.textureUtils.destroyTexture( texture, isDefaultTexture );
@@ -1949,17 +1955,17 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Returns texture data as a typed array.
-	 *
-	 * @async
-	 * @param {Texture} texture - The texture to copy.
-	 * @param {number} x - The x coordinate of the copy origin.
-	 * @param {number} y - The y coordinate of the copy origin.
-	 * @param {number} width - The width of the copy.
-	 * @param {number} height - The height of the copy.
-	 * @param {number} faceIndex - The face index.
-	 * @return {Promise<TypedArray>} A Promise that resolves with a typed array when the copy operation has finished.
-	 */
+* Returns texture data as a typed array.
+*
+* @async
+* @param {Texture} texture - The texture to copy.
+* @param {number} x - The x coordinate of the copy origin.
+* @param {number} y - The y coordinate of the copy origin.
+* @param {number} width - The width of the copy.
+* @param {number} height - The height of the copy.
+* @param {number} faceIndex - The face index.
+* @return {Promise<TypedArray>} A Promise that resolves with a typed array when the copy operation has finished.
+*/
 	async copyTextureToBuffer( texture, x, y, width, height, faceIndex ) {
 
 		return this.textureUtils.copyTextureToBuffer( texture, x, y, width, height, faceIndex );
@@ -1967,12 +1973,12 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Inits a time stamp query for the given render context.
-	 *
-	 * @param {string} type - The type of the timestamp query (e.g. 'render', 'compute').
-	 * @param {number} uid - Unique id for the context (e.g. render context id).
-	 * @param {Object} descriptor - The query descriptor.
-	 */
+* Inits a time stamp query for the given render context.
+*
+* @param {string} type - The type of the timestamp query (e.g. 'render', 'compute').
+* @param {number} uid - Unique id for the context (e.g. render context id).
+* @param {Object} descriptor - The query descriptor.
+*/
 	initTimestampQuery( type, uid, descriptor ) {
 
 		if ( ! this.trackTimestamp ) return;
@@ -2000,12 +2006,12 @@ class WebGPUBackend extends Backend {
 	// node builder
 
 	/**
-	 * Returns a node builder for the given render object.
-	 *
-	 * @param {RenderObject} object - The render object.
-	 * @param {Renderer} renderer - The renderer.
-	 * @return {WGSLNodeBuilder} The node builder.
-	 */
+* Returns a node builder for the given render object.
+*
+* @param {RenderObject} object - The render object.
+* @param {Renderer} renderer - The renderer.
+* @return {WGSLNodeBuilder} The node builder.
+*/
 	createNodeBuilder( object, renderer ) {
 
 		return new WGSLNodeBuilder( object, renderer );
@@ -2015,10 +2021,10 @@ class WebGPUBackend extends Backend {
 	// program
 
 	/**
-	 * Creates a shader program from the given programmable stage.
-	 *
-	 * @param {ProgrammableStage} program - The programmable stage.
-	 */
+* Creates a shader program from the given programmable stage.
+*
+* @param {ProgrammableStage} program - The programmable stage.
+*/
 	createProgram( program ) {
 
 		const programGPU = this.get( program );
@@ -2031,10 +2037,10 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Destroys the shader program of the given programmable stage.
-	 *
-	 * @param {ProgrammableStage} program - The programmable stage.
-	 */
+* Destroys the shader program of the given programmable stage.
+*
+* @param {ProgrammableStage} program - The programmable stage.
+*/
 	destroyProgram( program ) {
 
 		this.delete( program );
@@ -2044,11 +2050,11 @@ class WebGPUBackend extends Backend {
 	// pipelines
 
 	/**
-	 * Creates a render pipeline for the given render object.
-	 *
-	 * @param {RenderObject} renderObject - The render object.
-	 * @param {Array<Promise>} promises - An array of compilation promises which are used in `compileAsync()`.
-	 */
+* Creates a render pipeline for the given render object.
+*
+* @param {RenderObject} renderObject - The render object.
+* @param {Array<Promise>} promises - An array of compilation promises which are used in `compileAsync()`.
+*/
 	createRenderPipeline( renderObject, promises ) {
 
 		this.pipelineUtils.createRenderPipeline( renderObject, promises );
@@ -2056,11 +2062,11 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Creates a compute pipeline for the given compute node.
-	 *
-	 * @param {ComputePipeline} computePipeline - The compute pipeline.
-	 * @param {Array<BindGroup>} bindings - The bindings.
-	 */
+* Creates a compute pipeline for the given compute node.
+*
+* @param {ComputePipeline} computePipeline - The compute pipeline.
+* @param {Array<BindGroup>} bindings - The bindings.
+*/
 	createComputePipeline( computePipeline, bindings ) {
 
 		this.pipelineUtils.createComputePipeline( computePipeline, bindings );
@@ -2068,10 +2074,10 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Prepares the state for encoding render bundles.
-	 *
-	 * @param {RenderContext} renderContext - The render context.
-	 */
+* Prepares the state for encoding render bundles.
+*
+* @param {RenderContext} renderContext - The render context.
+*/
 	beginBundle( renderContext ) {
 
 		const renderContextData = this.get( renderContext );
@@ -2085,11 +2091,11 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * After processing render bundles this method finalizes related work.
-	 *
-	 * @param {RenderContext} renderContext - The render context.
-	 * @param {RenderBundle} bundle - The render bundle.
-	 */
+* After processing render bundles this method finalizes related work.
+*
+* @param {RenderContext} renderContext - The render context.
+* @param {RenderBundle} bundle - The render bundle.
+*/
 	finishBundle( renderContext, bundle ) {
 
 		const renderContextData = this.get( renderContext );
@@ -2107,11 +2113,11 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Adds a render bundle to the render context data.
-	 *
-	 * @param {RenderContext} renderContext - The render context.
-	 * @param {RenderBundle} bundle - The render bundle to add.
-	 */
+* Adds a render bundle to the render context data.
+*
+* @param {RenderContext} renderContext - The render context.
+* @param {RenderBundle} bundle - The render bundle to add.
+*/
 	addBundle( renderContext, bundle ) {
 
 		const renderContextData = this.get( renderContext );
@@ -2123,13 +2129,13 @@ class WebGPUBackend extends Backend {
 	// bindings
 
 	/**
-	 * Creates bindings from the given bind group definition.
-	 *
-	 * @param {BindGroup} bindGroup - The bind group.
-	 * @param {Array<BindGroup>} bindings - Array of bind groups.
-	 * @param {number} cacheIndex - The cache index.
-	 * @param {number} version - The version.
-	 */
+* Creates bindings from the given bind group definition.
+*
+* @param {BindGroup} bindGroup - The bind group.
+* @param {Array<BindGroup>} bindings - Array of bind groups.
+* @param {number} cacheIndex - The cache index.
+* @param {number} version - The version.
+*/
 	createBindings( bindGroup, bindings, cacheIndex, version ) {
 
 		this.bindingUtils.createBindings( bindGroup, bindings, cacheIndex, version );
@@ -2137,13 +2143,13 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Updates the given bind group definition.
-	 *
-	 * @param {BindGroup} bindGroup - The bind group.
-	 * @param {Array<BindGroup>} bindings - Array of bind groups.
-	 * @param {number} cacheIndex - The cache index.
-	 * @param {number} version - The version.
-	 */
+* Updates the given bind group definition.
+*
+* @param {BindGroup} bindGroup - The bind group.
+* @param {Array<BindGroup>} bindings - Array of bind groups.
+* @param {number} cacheIndex - The cache index.
+* @param {number} version - The version.
+*/
 	updateBindings( bindGroup, bindings, cacheIndex, version ) {
 
 		this.bindingUtils.createBindings( bindGroup, bindings, cacheIndex, version );
@@ -2151,10 +2157,10 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Updates a buffer binding.
-	 *
-	 *  @param {Buffer} binding - The buffer binding to update.
-	 */
+* Updates a buffer binding.
+*
+*  @param {Buffer} binding - The buffer binding to update.
+*/
 	updateBinding( binding ) {
 
 		this.bindingUtils.updateBinding( binding );
@@ -2162,10 +2168,10 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Delete data associated with the current bind group.
-	 *
-	 * @param {BindGroup} bindGroup - The bind group.
-	 */
+* Delete data associated with the current bind group.
+*
+* @param {BindGroup} bindGroup - The bind group.
+*/
 	deleteBindGroupData( bindGroup ) {
 
 		this.bindingUtils.deleteBindGroupData( bindGroup );
@@ -2175,10 +2181,10 @@ class WebGPUBackend extends Backend {
 	// attributes
 
 	/**
-	 * Creates the buffer of an indexed shader attribute.
-	 *
-	 * @param {BufferAttribute} attribute - The indexed buffer attribute.
-	 */
+* Creates the buffer of an indexed shader attribute.
+*
+* @param {BufferAttribute} attribute - The indexed buffer attribute.
+*/
 	createIndexAttribute( attribute ) {
 
 		let usage = GPUBufferUsage.INDEX | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST;
@@ -2194,10 +2200,10 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Creates the GPU buffer of a shader attribute.
-	 *
-	 * @param {BufferAttribute} attribute - The buffer attribute.
-	 */
+* Creates the GPU buffer of a shader attribute.
+*
+* @param {BufferAttribute} attribute - The buffer attribute.
+*/
 	createAttribute( attribute ) {
 
 		this.attributeUtils.createAttribute( attribute, GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST );
@@ -2205,10 +2211,10 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Creates the GPU buffer of a storage attribute.
-	 *
-	 * @param {BufferAttribute} attribute - The buffer attribute.
-	 */
+* Creates the GPU buffer of a storage attribute.
+*
+* @param {BufferAttribute} attribute - The buffer attribute.
+*/
 	createStorageAttribute( attribute ) {
 
 		this.attributeUtils.createAttribute( attribute, GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST );
@@ -2216,10 +2222,10 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Creates the GPU buffer of an indirect storage attribute.
-	 *
-	 * @param {BufferAttribute} attribute - The buffer attribute.
-	 */
+* Creates the GPU buffer of an indirect storage attribute.
+*
+* @param {BufferAttribute} attribute - The buffer attribute.
+*/
 	createIndirectStorageAttribute( attribute ) {
 
 		this.attributeUtils.createAttribute( attribute, GPUBufferUsage.STORAGE | GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST );
@@ -2227,10 +2233,10 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Updates the GPU buffer of a shader attribute.
-	 *
-	 * @param {BufferAttribute} attribute - The buffer attribute to update.
-	 */
+* Updates the GPU buffer of a shader attribute.
+*
+* @param {BufferAttribute} attribute - The buffer attribute to update.
+*/
 	updateAttribute( attribute ) {
 
 		this.attributeUtils.updateAttribute( attribute );
@@ -2238,10 +2244,10 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Destroys the GPU buffer of a shader attribute.
-	 *
-	 * @param {BufferAttribute} attribute - The buffer attribute to destroy.
-	 */
+* Destroys the GPU buffer of a shader attribute.
+*
+* @param {BufferAttribute} attribute - The buffer attribute to destroy.
+*/
 	destroyAttribute( attribute ) {
 
 		this.attributeUtils.destroyAttribute( attribute );
@@ -2251,8 +2257,8 @@ class WebGPUBackend extends Backend {
 	// canvas
 
 	/**
-	 * Triggers an update of the default render pass descriptor.
-	 */
+* Triggers an update of the default render pass descriptor.
+*/
 	updateSize() {
 
 		this.delete( this.renderer.getCanvasTarget() );
@@ -2262,10 +2268,10 @@ class WebGPUBackend extends Backend {
 	// utils public
 
 	/**
-	 * Returns the maximum anisotropy texture filtering value.
-	 *
-	 * @return {number} The maximum anisotropy texture filtering value.
-	 */
+* Returns the maximum anisotropy texture filtering value.
+*
+* @return {number} The maximum anisotropy texture filtering value.
+*/
 	getMaxAnisotropy() {
 
 		return 16;
@@ -2273,11 +2279,11 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Checks if the given feature is supported by the backend.
-	 *
-	 * @param {string} name - The feature's name.
-	 * @return {boolean} Whether the feature is supported or not.
-	 */
+* Checks if the given feature is supported by the backend.
+*
+* @param {string} name - The feature's name.
+* @return {boolean} Whether the feature is supported or not.
+*/
 	hasFeature( name ) {
 
 		if ( GPUFeatureMap[ name ] !== undefined ) name = GPUFeatureMap[ name ];
@@ -2287,15 +2293,15 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Copies data of the given source texture to the given destination texture.
-	 *
-	 * @param {Texture} srcTexture - The source texture.
-	 * @param {Texture} dstTexture - The destination texture.
-	 * @param {?(Box3|Box2)} [srcRegion=null] - The region of the source texture to copy.
-	 * @param {?(Vector2|Vector3)} [dstPosition=null] - The destination position of the copy.
-	 * @param {number} [srcLevel=0] - The mipmap level to copy.
-	 * @param {number} [dstLevel=0] - The destination mip level to copy to.
-	 */
+* Copies data of the given source texture to the given destination texture.
+*
+* @param {Texture} srcTexture - The source texture.
+* @param {Texture} dstTexture - The destination texture.
+* @param {?(Box3|Box2)} [srcRegion=null] - The region of the source texture to copy.
+* @param {?(Vector2|Vector3)} [dstPosition=null] - The destination position of the copy.
+* @param {number} [srcLevel=0] - The mipmap level to copy.
+* @param {number} [dstLevel=0] - The destination mip level to copy to.
+*/
 	copyTextureToTexture( srcTexture, dstTexture, srcRegion = null, dstPosition = null, srcLevel = 0, dstLevel = 0 ) {
 
 		let dstX = 0;
@@ -2378,12 +2384,12 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Copies the current bound framebuffer to the given texture.
-	 *
-	 * @param {Texture} texture - The destination texture.
-	 * @param {RenderContext} renderContext - The render context.
-	 * @param {Vector4} rectangle - A four dimensional vector defining the origin and dimension of the copy.
-	 */
+* Copies the current bound framebuffer to the given texture.
+*
+* @param {Texture} texture - The destination texture.
+* @param {RenderContext} renderContext - The render context.
+* @param {Vector4} rectangle - A four dimensional vector defining the origin and dimension of the copy.
+*/
 	copyFramebufferToTexture( texture, renderContext, rectangle ) {
 
 		const renderContextData = this.get( renderContext );
@@ -2431,6 +2437,8 @@ class WebGPUBackend extends Backend {
 		if ( renderContextData.currentPass ) {
 
 			renderContextData.currentPass.end();
+
+			this.setRenderPipeline( renderContextData.descriptor, null );
 
 			encoder = renderContextData.encoder;
 
@@ -2503,6 +2511,7 @@ class WebGPUBackend extends Backend {
 
 		this.bindingUtils.dispose();
 		this.textureUtils.dispose();
+		this.pipelineUtils.dispose();
 
 		if ( this.occludedResolveCache ) {
 

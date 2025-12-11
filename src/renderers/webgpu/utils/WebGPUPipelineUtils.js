@@ -25,57 +25,64 @@ import { error } from '../../../utils.js';
 class WebGPUPipelineUtils {
 
 	/**
-	 * Constructs a new utility object.
-	 *
-	 * @param {WebGPUBackend} backend - The WebGPU backend.
-	 */
+     * Constructs a new utility object.
+     *
+     * @param {WebGPUBackend} backend - The WebGPU backend.
+     */
 	constructor( backend ) {
 
 		/**
-		 * A reference to the WebGPU backend.
-		 *
-		 * @type {WebGPUBackend}
-		 */
+         * A reference to the WebGPU backend.
+         *
+         * @type {WebGPUBackend}
+         */
 		this.backend = backend;
 
 		/**
-		 * A Weak Map that tracks the active pipeline for render or compute passes.
-		 *
-		 * @private
-		 * @type {WeakMap<(GPURenderPassEncoder|GPUComputePassEncoder),(GPURenderPipeline|GPUComputePipeline)>}
-		 */
-		this._activePipelines = new WeakMap();
+         * A Weak Map that tracks the active pipeline for render or compute passes.
+         *
+         * @private
+         * @type {Map<string, (GPURenderPipeline|GPUComputePipeline)>}
+         */
+		this._activePipelines = new Map();
 
 	}
 
 	/**
-	 * Sets the given pipeline for the given pass. The method makes sure to only set the
-	 * pipeline when necessary.
-	 *
-	 * @param {(GPURenderPassEncoder|GPUComputePassEncoder)} pass - The pass encoder.
-	 * @param {(GPURenderPipeline|GPUComputePipeline)} pipeline - The pipeline.
-	 */
-	setPipeline( pass, pipeline ) {
+     * Sets the given pipeline for the given pass. The method makes sure to only set the
+     * pipeline when necessary.
+     *
+     * @param {(GPURenderPassDescriptor|GPUComputePassDescriptor)} descriptor - The compute pass encoder for the current compute gorup.
+     * @param {(GPURenderPipeline|GPUComputePipeline|null)} pipeline - The compute pipeline.
+     * @param {(GPURenderPassEncoder|GPUComputePassEncoder|null)} encoder - The compute pass encoder.
+     */
+	setPipeline( descriptor, pipeline = null, encoder = null ) {
 
-		const currentPipeline = this._activePipelines.get( pass );
+		const descriptorKey = JSON.stringify( descriptor );
+
+		const currentPipeline = this._activePipelines.get( descriptorKey );
 
 		if ( currentPipeline !== pipeline ) {
 
-			pass.setPipeline( pipeline );
+			if ( encoder ) {
 
-			this._activePipelines.set( pass, pipeline );
+				encoder.setPipeline( pipeline );
+
+			}
+
+			this._activePipelines.set( descriptorKey, pipeline );
 
 		}
 
 	}
 
 	/**
-	 * Returns the sample count derived from the given render context.
-	 *
-	 * @private
-	 * @param {RenderContext} renderContext - The render context.
-	 * @return {number} The sample count.
-	 */
+     * Returns the sample count derived from the given render context.
+     *
+     * @private
+     * @param {RenderContext} renderContext - The render context.
+     * @return {number} The sample count.
+     */
 	_getSampleCount( renderContext ) {
 
 		return this.backend.utils.getSampleCountRenderContext( renderContext );
@@ -83,11 +90,11 @@ class WebGPUPipelineUtils {
 	}
 
 	/**
-	 * Creates a render pipeline for the given render object.
-	 *
-	 * @param {RenderObject} renderObject - The render object.
-	 * @param {Array<Promise>} promises - An array of compilation promises which are used in `compileAsync()`.
-	 */
+     * Creates a render pipeline for the given render object.
+     *
+     * @param {RenderObject} renderObject - The render object.
+     * @param {Array<Promise>} promises - An array of compilation promises which are used in `compileAsync()`.
+     */
 	createRenderPipeline( renderObject, promises ) {
 
 		const { object, material, geometry, pipeline } = renderObject;
@@ -294,12 +301,12 @@ class WebGPUPipelineUtils {
 	}
 
 	/**
-	 * Creates GPU render bundle encoder for the given render context.
-	 *
-	 * @param {RenderContext} renderContext - The render context.
-	 * @param {?string} [label='renderBundleEncoder'] - The label.
-	 * @return {GPURenderBundleEncoder} The GPU render bundle encoder.
-	 */
+     * Creates GPU render bundle encoder for the given render context.
+     *
+     * @param {RenderContext} renderContext - The render context.
+     * @param {?string} [label='renderBundleEncoder'] - The label.
+     * @return {GPURenderBundleEncoder} The GPU render bundle encoder.
+     */
 	createBundleEncoder( renderContext, label = 'renderBundleEncoder' ) {
 
 		const backend = this.backend;
@@ -321,11 +328,11 @@ class WebGPUPipelineUtils {
 	}
 
 	/**
-	 * Creates a compute pipeline for the given compute node.
-	 *
-	 * @param {ComputePipeline} pipeline - The compute pipeline.
-	 * @param {Array<BindGroup>} bindings - The bindings.
-	 */
+     * Creates a compute pipeline for the given compute node.
+     *
+     * @param {ComputePipeline} pipeline - The compute pipeline.
+     * @param {Array<BindGroup>} bindings - The bindings.
+     */
 	createComputePipeline( pipeline, bindings ) {
 
 		const backend = this.backend;
@@ -358,13 +365,13 @@ class WebGPUPipelineUtils {
 	}
 
 	/**
-	 * Returns the blending state as a descriptor object required
-	 * for the pipeline creation.
-	 *
-	 * @private
-	 * @param {Material} material - The material.
-	 * @return {Object} The blending state.
-	 */
+     * Returns the blending state as a descriptor object required
+     * for the pipeline creation.
+     *
+     * @private
+     * @param {Material} material - The material.
+     * @return {Object} The blending state.
+     */
 	_getBlending( material ) {
 
 		let color, alpha;
@@ -473,12 +480,12 @@ class WebGPUPipelineUtils {
 
 	}
 	/**
-	 * Returns the GPU blend factor which is required for the pipeline creation.
-	 *
-	 * @private
-	 * @param {number} blend - The blend factor as a three.js constant.
-	 * @return {string} The GPU blend factor.
-	 */
+     * Returns the GPU blend factor which is required for the pipeline creation.
+     *
+     * @private
+     * @param {number} blend - The blend factor as a three.js constant.
+     * @return {string} The GPU blend factor.
+     */
 	_getBlendFactor( blend ) {
 
 		let blendFactor;
@@ -547,12 +554,12 @@ class WebGPUPipelineUtils {
 	}
 
 	/**
-	 * Returns the GPU stencil compare function which is required for the pipeline creation.
-	 *
-	 * @private
-	 * @param {Material} material - The material.
-	 * @return {string} The GPU stencil compare function.
-	 */
+     * Returns the GPU stencil compare function which is required for the pipeline creation.
+     *
+     * @private
+     * @param {Material} material - The material.
+     * @return {string} The GPU stencil compare function.
+     */
 	_getStencilCompare( material ) {
 
 		let stencilCompare;
@@ -603,12 +610,12 @@ class WebGPUPipelineUtils {
 	}
 
 	/**
-	 * Returns the GPU stencil operation which is required for the pipeline creation.
-	 *
-	 * @private
-	 * @param {number} op - A three.js constant defining the stencil operation.
-	 * @return {string} The GPU stencil operation.
-	 */
+     * Returns the GPU stencil operation which is required for the pipeline creation.
+     *
+     * @private
+     * @param {number} op - A three.js constant defining the stencil operation.
+     * @return {string} The GPU stencil operation.
+     */
 	_getStencilOperation( op ) {
 
 		let stencilOperation;
@@ -657,12 +664,12 @@ class WebGPUPipelineUtils {
 	}
 
 	/**
-	 * Returns the GPU blend operation which is required for the pipeline creation.
-	 *
-	 * @private
-	 * @param {number} blendEquation - A three.js constant defining the blend equation.
-	 * @return {string} The GPU blend operation.
-	 */
+     * Returns the GPU blend operation which is required for the pipeline creation.
+     *
+     * @private
+     * @param {number} blendEquation - A three.js constant defining the blend equation.
+     * @return {string} The GPU blend operation.
+     */
 	_getBlendOperation( blendEquation ) {
 
 		let blendOperation;
@@ -699,15 +706,15 @@ class WebGPUPipelineUtils {
 	}
 
 	/**
-	 * Returns the primitive state as a descriptor object required
-	 * for the pipeline creation.
-	 *
-	 * @private
-	 * @param {Object3D} object - The 3D object.
-	 * @param {BufferGeometry} geometry - The geometry.
-	 * @param {Material} material - The material.
-	 * @return {Object} The primitive state.
-	 */
+     * Returns the primitive state as a descriptor object required
+     * for the pipeline creation.
+     *
+     * @private
+     * @param {Object3D} object - The 3D object.
+     * @param {BufferGeometry} geometry - The geometry.
+     * @param {Material} material - The material.
+     * @return {Object} The primitive state.
+     */
 	_getPrimitiveState( object, geometry, material ) {
 
 		const descriptor = {};
@@ -740,12 +747,12 @@ class WebGPUPipelineUtils {
 	}
 
 	/**
-	 * Returns the GPU color write mask which is required for the pipeline creation.
-	 *
-	 * @private
-	 * @param {Material} material - The material.
-	 * @return {number} The GPU color write mask.
-	 */
+     * Returns the GPU color write mask which is required for the pipeline creation.
+     *
+     * @private
+     * @param {Material} material - The material.
+     * @return {number} The GPU color write mask.
+     */
 	_getColorWriteMask( material ) {
 
 		return ( material.colorWrite === true ) ? GPUColorWriteFlags.All : GPUColorWriteFlags.None;
@@ -753,12 +760,12 @@ class WebGPUPipelineUtils {
 	}
 
 	/**
-	 * Returns the GPU depth compare function which is required for the pipeline creation.
-	 *
-	 * @private
-	 * @param {Material} material - The material.
-	 * @return {string} The GPU depth compare function.
-	 */
+     * Returns the GPU depth compare function which is required for the pipeline creation.
+     *
+     * @private
+     * @param {Material} material - The material.
+     * @return {string} The GPU depth compare function.
+     */
 	_getDepthCompare( material ) {
 
 		let depthCompare;
@@ -813,6 +820,12 @@ class WebGPUPipelineUtils {
 		}
 
 		return depthCompare;
+
+	}
+
+	dispose() {
+
+		this._activePipelines.clear();
 
 	}
 
