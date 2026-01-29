@@ -1,10 +1,10 @@
 import Animation from './Animation.js';
 import RenderObjects from './RenderObjects.js';
-import Attributes from './Attributes.js';
 import Geometries from './Geometries.js';
 import Info from './Info.js';
-import Pipelines from './Pipelines.js';
-import Bindings from './Bindings.js';
+import AttributeManager from './AttributeManager.js';
+import PipelineManager from './PipelineManager.js';
+import BindingManager from './Bindings.js';
 import RenderLists from './RenderLists.js';
 import RenderContexts from './RenderContexts.js';
 import Textures from './Textures.js';
@@ -301,10 +301,10 @@ class Renderer {
 		 * A reference to a renderer module for managing shader attributes.
 		 *
 		 * @private
-		 * @type {?Attributes}
+		 * @type {?AttributeManager}
 		 * @default null
 		 */
-		this._attributes = null;
+		this._attributeManager = null;
 
 		/**
 		 * A reference to a renderer module for managing geometries.
@@ -337,10 +337,10 @@ class Renderer {
 		 * A reference to a renderer module for managing shader program bindings.
 		 *
 		 * @private
-		 * @type {?Bindings}
+		 * @type {?BindingManager}
 		 * @default null
 		 */
-		this._bindings = null;
+		this._bindingManager = null;
 
 		/**
 		 * A reference to a renderer module for managing render objects.
@@ -355,10 +355,10 @@ class Renderer {
 		 * A reference to a renderer module for managing render and compute pipelines.
 		 *
 		 * @private
-		 * @type {?Pipelines}
+		 * @type {?PipelineManager}
 		 * @default null
 		 */
-		this._pipelines = null;
+		this._pipelineManager = null;
 
 		/**
 		 * A reference to a renderer module for managing render bundles.
@@ -775,13 +775,13 @@ class Renderer {
 
 			this._nodes = new NodeManager( this, backend );
 			this._animation = new Animation( this, this._nodes, this.info );
-			this._attributes = new Attributes( backend );
+			this._attributeManager = new AttributeManager( backend );
 			this._background = new Background( this, this._nodes );
-			this._geometries = new Geometries( this._attributes, this.info );
+			this._geometries = new Geometries( this._attributeManager, this.info );
 			this._textures = new Textures( this, backend, this.info );
-			this._pipelines = new Pipelines( backend, this._nodes );
-			this._bindings = new Bindings( backend, this._nodes, this._textures, this._attributes, this._pipelines, this.info );
-			this._objects = new RenderObjects( this, this._nodes, this._geometries, this._pipelines, this._bindings, this.info );
+			this._pipelineManager = new PipelineManager( backend, this._nodes );
+			this._bindingManager = new BindingManager( backend, this._nodes, this._textures, this._attributeManager, this._pipelineManager, this.info );
+			this._objects = new RenderObjects( this, this._nodes, this._geometries, this._pipelineManager, this._bindingManager, this.info );
 			this._renderLists = new RenderLists( this.lighting );
 			this._bundles = new RenderBundles();
 			this._renderContexts = new RenderContexts();
@@ -1221,7 +1221,7 @@ class Renderer {
 					this._nodes.updateBefore( renderObject );
 
 					this._nodes.updateForRender( renderObject );
-					this._bindings.updateForRender( renderObject );
+					this._bindingManager.updateForRender( renderObject );
 
 					this._nodes.updateAfter( renderObject );
 
@@ -2306,9 +2306,9 @@ class Renderer {
 			this._animation.dispose();
 			this._objects.dispose();
 			this._geometries.dispose();
-			this._pipelines.dispose();
+			this._pipelineManager.dispose();
 			this._nodes.dispose();
-			this._bindings.dispose();
+			this._bindingManager.dispose();
 			this._renderLists.dispose();
 			this._renderContexts.dispose();
 			this._textures.dispose();
@@ -2509,8 +2509,8 @@ class Renderer {
 		//
 
 		const backend = this.backend;
-		const pipelines = this._pipelines;
-		const bindings = this._bindings;
+		const pipelineManager = this._pipelineManager;
+		const bindingManager = this._bindingManager;
 		const nodes = this._nodes;
 
 		const computeList = Array.isArray( computeNodes ) ? computeNodes : [ computeNodes ];
@@ -2527,14 +2527,14 @@ class Renderer {
 
 			// onInit
 
-			if ( pipelines.has( computeNode ) === false ) {
+			if ( pipelineManager.has( computeNode ) === false ) {
 
 				const dispose = () => {
 
 					computeNode.removeEventListener( 'dispose', dispose );
 
-					pipelines.delete( computeNode );
-					bindings.deleteForCompute( computeNode );
+					pipelineManager.delete( computeNode );
+					bindingManager.deleteForCompute( computeNode );
 					nodes.delete( computeNode );
 
 				};
@@ -2554,10 +2554,10 @@ class Renderer {
 			}
 
 			nodes.updateForCompute( computeNode );
-			bindings.updateForCompute( computeNode );
+			bindingManager.updateForCompute( computeNode );
 
-			const computeBindings = bindings.getForCompute( computeNode );
-			const computePipeline = pipelines.getForCompute( computeNode, computeBindings );
+			const computeBindings = bindingManager.getForCompute( computeNode );
+			const computePipeline = pipelineManager.getForCompute( computeNode, computeBindings );
 
 			backend.compute( computeNodes, computeNode, computeBindings, computePipeline, dispatchSize );
 
@@ -3315,11 +3315,11 @@ class Renderer {
 			this._geometries.updateForRender( renderObject );
 
 			this._nodes.updateForRender( renderObject );
-			this._bindings.updateForRender( renderObject );
+			this._bindingManager.updateForRender( renderObject );
 
 		}
 
-		this._pipelines.updateForRender( renderObject );
+		this._pipelineManager.updateForRender( renderObject );
 
 		//
 
@@ -3366,9 +3366,9 @@ class Renderer {
 		this._geometries.updateForRender( renderObject );
 
 		this._nodes.updateForRender( renderObject );
-		this._bindings.updateForRender( renderObject );
+		this._bindingManager.updateForRender( renderObject );
 
-		this._pipelines.getForRender( renderObject, this._compilationPromises );
+		this._pipelineManager.getForRender( renderObject, this._compilationPromises );
 
 		this._nodes.updateAfter( renderObject );
 

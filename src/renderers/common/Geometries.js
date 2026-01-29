@@ -81,19 +81,19 @@ class Geometries extends DataMap {
 	/**
 	 * Constructs a new geometry management component.
 	 *
-	 * @param {Attributes} attributes - Renderer component for managing attributes.
+	 * @param {AttributeManager} attributeManager - Renderer component for managing attributes.
 	 * @param {Info} info - Renderer component for managing metrics and monitoring data.
 	 */
-	constructor( attributes, info ) {
+	constructor( attributeManager, info ) {
 
 		super();
 
 		/**
 		 * Renderer component for managing attributes.
 		 *
-		 * @type {Attributes}
+		 * @type {AttributeManager}
 		 */
-		this.attributes = attributes;
+		this.attributeManager = attributeManager;
 
 		/**
 		 * Renderer component for managing metrics and monitoring data.
@@ -177,13 +177,13 @@ class Geometries extends DataMap {
 
 			if ( index !== null ) {
 
-				this.attributes.delete( index );
+				this.attributeManager.delete( index );
 
 			}
 
 			for ( const geometryAttribute of geometryAttributes ) {
 
-				this.attributes.delete( geometryAttribute );
+				this.attributeManager.delete( geometryAttribute );
 
 			}
 
@@ -191,7 +191,7 @@ class Geometries extends DataMap {
 
 			if ( wireframeAttribute !== undefined ) {
 
-				this.attributes.delete( wireframeAttribute );
+				this.attributeManager.delete( wireframeAttribute );
 
 			}
 
@@ -270,7 +270,7 @@ class Geometries extends DataMap {
 
 			if ( this.attributeCall.get( attribute ) !== callId ) {
 
-				this.attributes.update( attribute, type );
+				this.attributeManager.update( attribute, type );
 
 				this.attributeCall.set( attribute, callId );
 
@@ -280,13 +280,13 @@ class Geometries extends DataMap {
 
 			if ( this.attributeCall.get( attribute ) === undefined ) {
 
-				this.attributes.update( attribute, type );
+				this.attributeManager.update( attribute, type );
 
 				this.attributeCall.set( attribute, callId );
 
 			} else if ( this.attributeCall.get( attribute.data ) !== callId ) {
 
-				this.attributes.update( attribute, type );
+				this.attributeManager.update( attribute, type );
 
 				this.attributeCall.set( attribute.data, callId );
 
@@ -349,7 +349,7 @@ class Geometries extends DataMap {
 
 			} else if ( wireframeAttribute.version !== getWireframeVersion( geometry ) ) {
 
-				this.attributes.delete( wireframeAttribute );
+				this.attributeManager.delete( wireframeAttribute );
 
 				wireframeAttribute = getWireframeIndex( geometry );
 

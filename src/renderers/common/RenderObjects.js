@@ -16,11 +16,11 @@ class RenderObjects {
 	 * @param {Renderer} renderer - The renderer.
 	 * @param {Nodes} nodes - Renderer component for managing nodes related logic.
 	 * @param {Geometries} geometries - Renderer component for managing geometries.
-	 * @param {Pipelines} pipelines - Renderer component for managing pipelines.
-	 * @param {Bindings} bindings - Renderer component for managing bindings.
+	 * @param {PipelineManager} pipelineManager - Renderer component for managing pipelines.
+	 * @param {BindingManager} bindingManager - Renderer component for managing bindings.
 	 * @param {Info} info - Renderer component for managing metrics and monitoring data.
 	 */
-	constructor( renderer, nodes, geometries, pipelines, bindings, info ) {
+	constructor( renderer, nodes, geometries, pipelineManager, bindingManager, info ) {
 
 		/**
 		 * The renderer.
@@ -46,16 +46,16 @@ class RenderObjects {
 		/**
 		 * Renderer component for managing pipelines.
 		 *
-		 * @type {Pipelines}
+		 * @type {pipelineManager}
 		 */
-		this.pipelines = pipelines;
+		this.pipelineManager = pipelineManager;
 
 		/**
 		 * Renderer component for managing bindings.
 		 *
-		 * @type {Bindings}
+		 * @type {BindingManager}
 		 */
-		this.bindings = bindings;
+		this.bindingManager = bindingManager;
 
 		/**
 		 * Renderer component for managing metrics and monitoring data.
@@ -200,8 +200,8 @@ class RenderObjects {
 
 		renderObject.onDispose = () => {
 
-			this.pipelines.delete( renderObject );
-			this.bindings.deleteForRender( renderObject );
+			this.pipelineManager.delete( renderObject );
+			this.bindingManager.deleteForRender( renderObject );
 			this.nodes.delete( renderObject );
 
 			chainMap.delete( renderObject.getChainArray() );

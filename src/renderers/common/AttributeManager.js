@@ -9,7 +9,7 @@ import { DynamicDrawUsage } from '../../constants.js';
  * @private
  * @augments DataMap
  */
-class Attributes extends DataMap {
+class AttributeManager extends DataMap {
 
 	/**
 	 * Constructs a new attribute management component.
@@ -115,4 +115,4 @@ class Attributes extends DataMap {
 
 }
 
-export default Attributes;
+export default AttributeManager;

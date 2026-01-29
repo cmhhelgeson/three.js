@@ -7,7 +7,7 @@ import { AttributeType } from './Constants.js';
  * @private
  * @augments DataMap
  */
-class Bindings extends DataMap {
+class BindingManager extends DataMap {
 
 	/**
 	 * Constructs a new bindings management component.
@@ -15,11 +15,11 @@ class Bindings extends DataMap {
 	 * @param {Backend} backend - The renderer's backend.
 	 * @param {Nodes} nodes - Renderer component for managing nodes related logic.
 	 * @param {Textures} textures - Renderer component for managing textures.
-	 * @param {Attributes} attributes - Renderer component for managing attributes.
-	 * @param {Pipelines} pipelines - Renderer component for managing pipelines.
+	 * @param {AttributeManager} attributeManager - Renderer component for managing attributes.
+	 * @param {PipelineManager} pipelineManager - Renderer component for managing pipelines.
 	 * @param {Info} info - Renderer component for managing metrics and monitoring data.
 	 */
-	constructor( backend, nodes, textures, attributes, pipelines, info ) {
+	constructor( backend, nodes, textures, attributeManager, pipelineManager, info ) {
 
 		super();
 
@@ -40,16 +40,16 @@ class Bindings extends DataMap {
 		/**
 		 * Renderer component for managing pipelines.
 		 *
-		 * @type {Pipelines}
+		 * @type {PipelineManager}
 		 */
-		this.pipelines = pipelines;
+		this.pipelineManager = pipelineManager;
 
 		/**
 		 * Renderer component for managing attributes.
 		 *
-		 * @type {Attributes}
+		 * @type {AttributeManager}
 		 */
-		this.attributes = attributes;
+		this.attributeManager = attributeManager;
 
 		/**
 		 * Renderer component for managing nodes related logic.
@@ -65,7 +65,7 @@ class Bindings extends DataMap {
 		 */
 		this.info = info;
 
-		this.pipelines.bindings = this; // assign bindings to pipelines
+		this.pipelineManager.bindings = this; // assign bindings to pipelines
 
 	}
 
@@ -226,7 +226,7 @@ class Bindings extends DataMap {
 				const attribute = binding.attribute;
 				const attributeType = attribute.isIndirectStorageBufferAttribute ? AttributeType.INDIRECT : AttributeType.STORAGE;
 
-				this.attributes.update( attribute, attributeType );
+				this.attributeManager.update( attribute, attributeType );
 
 			}
 
@@ -269,7 +269,7 @@ class Bindings extends DataMap {
 
 				const bindingData = backend.get( binding );
 
-				this.attributes.update( attribute, attributeType );
+				this.attributeManager.update( attribute, attributeType );
 
 				if ( bindingData.attribute !== attribute ) {
 
@@ -391,4 +391,4 @@ class Bindings extends DataMap {
 
 }
 
-export default Bindings;
+export default BindingManager;

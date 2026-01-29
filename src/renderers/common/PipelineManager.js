@@ -9,7 +9,7 @@ import ProgrammableStage from './ProgrammableStage.js';
  * @private
  * @augments DataMap
  */
-class Pipelines extends DataMap {
+class PipelineManager extends DataMap {
 
 	/**
 	 * Constructs a new pipeline management component.
@@ -37,13 +37,13 @@ class Pipelines extends DataMap {
 
 		/**
 		 * A references to the bindings management component.
-		 * This reference will be set inside the `Bindings`
+		 * This reference will be set inside the `BindingManager`
 		 * constructor.
 		 *
-		 * @type {?Bindings}
+		 * @type {?BindingManager}
 		 * @default null
 		 */
-		this.bindings = null;
+		this.bindingManager = null;
 
 		/**
 		 * Internal cache for maintaining pipelines.
@@ -462,4 +462,4 @@ class Pipelines extends DataMap {
 
 }
 
-export default Pipelines;
+export default PipelineManager;
