@@ -6,7 +6,7 @@ import { GPUFeatureName, GPULoadOp, GPUStoreOp, GPUIndexFormat, GPUTextureViewDi
 import WGSLNodeBuilder from './nodes/WGSLNodeBuilder.js';
 import Backend from '../common/Backend.js';
 
-import WebGPUUtils, { submit } from './utils/WebGPUUtils.js';
+import WebGPUUtils from './utils/WebGPUUtils.js';
 import WebGPUAttributeUtils from './utils/WebGPUAttributeUtils.js';
 import WebGPUBindingUtils from './utils/WebGPUBindingUtils.js';
 import WebGPUCapabilities from './utils/WebGPUCapabilities.js';
@@ -171,6 +171,51 @@ class WebGPUBackend extends Backend {
 		 * @type {Map<number,GPUBuffer>}
 		 */
 		this.occludedResolveCache = new Map();
+
+		// command submission batching
+
+		/**
+		 * The command encoder shared by all non-nested passes of the current frame.
+		 * It is created lazily by {@link WebGPUBackend#_acquireCommandEncoder} and its
+		 * command buffer is submitted once per frame by {@link WebGPUBackend#_flush}.
+		 * Nested rendering (a pass encoder opened while another is still open) cannot
+		 * share this command encoder, since a command encoder may only have one open
+		 * pass encoder at a time, and therefore uses a dedicated command encoder.
+		 *
+		 * @private
+		 * @type {?GPUCommandEncoder}
+		 * @default null
+		 */
+		this._commandEncoder = null;
+
+		/**
+		 * Finished command buffers awaiting a single `queue.submit()` for the frame.
+		 * Buffers from nested command encoders are collected here (ordered before the
+		 * frame command encoder's buffer) so the whole frame is submitted at once.
+		 *
+		 * @private
+		 * @type {Array<GPUCommandBuffer>}
+		 */
+		this._commandBuffers = [];
+
+		/**
+		 * The render contexts / compute groups whose pass encoder is currently open.
+		 * Its depth is used to detect nested rendering: when it is non-empty, a new
+		 * pass must be recorded on a dedicated command encoder.
+		 *
+		 * @private
+		 * @type {Array<Object>}
+		 */
+		this._passStack = [];
+
+		/**
+		 * Whether a microtask has already been scheduled to flush (submit) the frame's
+		 * accumulated command buffers.
+		 *
+		 * @private
+		 * @type {boolean}
+		 */
+		this._flushScheduled = false;
 
 		// compatibility checks
 
@@ -406,6 +451,11 @@ class WebGPUBackend extends Backend {
 	 * @return {Promise<ArrayBuffer|ReadbackBuffer>} A promise that resolves with the buffer data when the data are ready.
 	 */
 	async getArrayBufferAsync( attribute, target = null, offset = 0, count = - 1 ) {
+
+		// the buffer may have been written by not-yet-submitted work this frame; submit it
+		// before the read-back so mapAsync() does not observe stale data
+
+		this._flush();
 
 		return await this.attributeUtils.getArrayBufferAsync( attribute, target, offset, count );
 
@@ -779,6 +829,123 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
+	 * Returns a command encoder suitable for beginning a new pass encoder.
+	 *
+	 * Non-nested passes share a single per-frame command encoder, which is created
+	 * lazily and submitted once per frame (see {@link WebGPUBackend#_flush}). When a
+	 * pass encoder is already open (nested rendering), a dedicated command encoder is
+	 * returned instead, because a command encoder may only have one open pass encoder
+	 * at a time.
+	 *
+	 * @private
+	 * @param {string} label - A debug label for the command encoder.
+	 * @return {{commandEncoder: GPUCommandEncoder, nested: boolean}} The command encoder
+	 * and whether it is a dedicated (nested) encoder that must be submitted on its own.
+	 */
+	_acquireCommandEncoder( label ) {
+
+		if ( this._passStack.length > 0 ) {
+
+			// nested: a parent pass encoder is still open, so a dedicated command encoder is required
+
+			_commandEncoderDescriptor.label = label + '_nested';
+			const commandEncoder = this.device.createCommandEncoder( _commandEncoderDescriptor );
+			_commandEncoderDescriptor.reset();
+
+			return { commandEncoder, nested: true };
+
+		}
+
+		if ( this._commandEncoder === null ) {
+
+			_commandEncoderDescriptor.label = 'frame';
+			this._commandEncoder = this.device.createCommandEncoder( _commandEncoderDescriptor );
+			_commandEncoderDescriptor.reset();
+
+			this._scheduleFlush();
+
+		}
+
+		return { commandEncoder: this._commandEncoder, nested: false };
+
+	}
+
+	/**
+	 * Finishes a dedicated (nested) command encoder and queues its command buffer for
+	 * the frame's single submit. Nested buffers are ordered before the frame command
+	 * encoder's buffer so their work executes first (a nested render typically produces
+	 * a resource consumed by the parent pass).
+	 *
+	 * @private
+	 * @param {GPUCommandEncoder} commandEncoder - The dedicated command encoder to finish.
+	 */
+	_submitCommandEncoder( commandEncoder ) {
+
+		this._commandBuffers.push( commandEncoder.finish() );
+
+		this._scheduleFlush();
+
+	}
+
+	/**
+	 * Schedules a microtask that flushes the frame's accumulated command buffers with a
+	 * single `queue.submit()`. This keeps the public API unchanged while collapsing the
+	 * many per-pass submits into one per frame.
+	 *
+	 * @private
+	 */
+	_scheduleFlush() {
+
+		if ( this._flushScheduled === false ) {
+
+			this._flushScheduled = true;
+
+			queueMicrotask( () => this._flush() );
+
+		}
+
+	}
+
+	/**
+	 * Submits all of the frame's accumulated command buffers with a single
+	 * `queue.submit()` call. This is invoked automatically via a microtask, and
+	 * defensively before any CPU read-back (`mapAsync`) so that the read never
+	 * precedes the submit of the work that produced the data. It is idempotent.
+	 *
+	 * @private
+	 */
+	_flush() {
+
+		this._flushScheduled = false;
+
+		if ( this._passStack.length > 0 ) {
+
+			// a pass encoder is still open (e.g. a microtask fired mid-render); finishing the
+			// command encoder now would be invalid. Defer: the next acquire/read-back reschedules.
+
+			return;
+
+		}
+
+		if ( this._commandEncoder !== null ) {
+
+			// the frame command encoder is submitted last so its passes run after any nested work
+
+			this._commandBuffers.push( this._commandEncoder.finish() );
+			this._commandEncoder = null;
+
+		}
+
+		if ( this._commandBuffers.length > 0 ) {
+
+			this.device.queue.submit( this._commandBuffers );
+			this._commandBuffers.length = 0;
+
+		}
+
+	}
+
+	/**
 	 * This method is executed at the beginning of a render call and prepares
 	 * the WebGPU state for upcoming render calls
 	 *
@@ -936,9 +1103,13 @@ class WebGPUBackend extends Backend {
 
 		//
 
-		_commandEncoderDescriptor.label = 'renderContext_' + renderContext.id;
-		const encoder = device.createCommandEncoder( _commandEncoderDescriptor );
-		_commandEncoderDescriptor.reset();
+		const { commandEncoder: encoder, nested } = this._acquireCommandEncoder( 'renderContext_' + renderContext.id );
+
+		// track this render context as holding an active pass slot so that any nested
+		// render started while it is open is given a dedicated command encoder
+
+		renderContextData.nested = nested;
+		this._passStack.push( renderContext );
 
 		// Layered render targets: prepare bundle encoders for each camera in the array camera.
 
@@ -1269,13 +1440,32 @@ class WebGPUBackend extends Backend {
 
 			renderContextData.occlusionQueryBuffer = readBuffer;
 
-			//
+		}
+
+		this._passStack.pop();
+
+		if ( renderContextData.nested === true ) {
+
+			// nested render: queue its dedicated command buffer for the frame's single submit
+			// (ordered before the frame command encoder's buffer)
+
+			this._submitCommandEncoder( renderContextData.encoder );
+
+		}
+
+		// non-nested renders record into the shared frame command encoder, which is submitted
+		// once per frame by _flush() (via a microtask)
+
+		if ( occlusionQueryCount > 0 ) {
+
+			// occlusion results are read back on the CPU, so the recorded resolve must be
+			// submitted before mapAsync(); force the frame's work to be submitted now
+
+			this._flush();
 
 			this.resolveOccludedAsync( renderContext );
 
 		}
-
-		submit( this.device, renderContextData.encoder.finish() );
 
 
 		//
@@ -1424,7 +1614,6 @@ class WebGPUBackend extends Backend {
 	 */
 	clear( color, depth, stencil, renderTargetContext = null ) {
 
-		const device = this.device;
 		const renderer = this.renderer;
 
 		let colorAttachments = [];
@@ -1540,9 +1729,7 @@ class WebGPUBackend extends Backend {
 
 		//
 
-		_commandEncoderDescriptor.label = 'clear';
-		const encoder = device.createCommandEncoder( _commandEncoderDescriptor );
-		_commandEncoderDescriptor.reset();
+		const { commandEncoder: encoder, nested } = this._acquireCommandEncoder( 'clear' );
 
 		const currentPass = encoder.beginRenderPass( {
 			colorAttachments,
@@ -1551,7 +1738,13 @@ class WebGPUBackend extends Backend {
 
 		currentPass.end();
 
-		submit( device, encoder.finish() );
+		if ( nested === true ) {
+
+			this._submitCommandEncoder( encoder );
+
+		}
+
+		// otherwise the clear is recorded into the shared frame command encoder and submitted by _flush()
 
 	}
 
@@ -1572,15 +1765,18 @@ class WebGPUBackend extends Backend {
 		const label = 'computeGroup_' + computeGroup.id;
 
 		_computePassDescriptor.label = label;
-		_commandEncoderDescriptor.label = label;
 
 		this.initTimestampQuery( TimestampQuery.COMPUTE, this.getTimestampUID( computeGroup ), _computePassDescriptor );
 
-		groupGPU.cmdEncoderGPU = this.device.createCommandEncoder( _commandEncoderDescriptor );
-		groupGPU.passEncoderGPU = groupGPU.cmdEncoderGPU.beginComputePass( _computePassDescriptor );
+		const { commandEncoder, nested } = this._acquireCommandEncoder( label );
+
+		groupGPU.nested = nested;
+		this._passStack.push( computeGroup );
+
+		groupGPU.cmdEncoderGPU = commandEncoder;
+		groupGPU.passEncoderGPU = commandEncoder.beginComputePass( _computePassDescriptor );
 		groupGPU.currentPipeline = null;
 
-		_commandEncoderDescriptor.reset();
 		_computePassDescriptor.reset();
 
 	}
@@ -1708,7 +1904,17 @@ class WebGPUBackend extends Backend {
 
 		groupData.passEncoderGPU.end();
 
-		submit( this.device, groupData.cmdEncoderGPU.finish() );
+		this._passStack.pop();
+
+		if ( groupData.nested === true ) {
+
+			// nested compute: queue its dedicated command buffer for the frame's single submit
+
+			this._submitCommandEncoder( groupData.cmdEncoderGPU );
+
+		}
+
+		// non-nested compute records into the shared frame command encoder, submitted by _flush()
 
 	}
 
@@ -2241,7 +2447,29 @@ class WebGPUBackend extends Backend {
 	 */
 	async copyTextureToBuffer( texture, x, y, width, height, faceIndex ) {
 
+		// submit any not-yet-submitted frame work so the read-back does not observe stale data
+
+		this._flush();
+
 		return this.textureUtils.copyTextureToBuffer( texture, x, y, width, height, faceIndex );
+
+	}
+
+	/**
+	 * Resolves the time stamp for the given render context and type.
+	 *
+	 * @async
+	 * @param {string} [type='render'] - The type of the time stamp.
+	 * @return {Promise<number>} A Promise that resolves with the time stamp.
+	 */
+	async resolveTimestampsAsync( type = 'render' ) {
+
+		// the timestamp query set is written by render/compute passes that may not have been
+		// submitted yet this frame; submit them before the query set is resolved and read back
+
+		this._flush();
+
+		return super.resolveTimestampsAsync( type );
 
 	}
 
@@ -2683,9 +2911,7 @@ class WebGPUBackend extends Backend {
 
 		}
 
-		_commandEncoderDescriptor.label = 'copyTextureToTexture_' + srcTexture.id + '_' + dstTexture.id;
-		const encoder = this.device.createCommandEncoder( _commandEncoderDescriptor );
-		_commandEncoderDescriptor.reset();
+		const { commandEncoder: encoder, nested } = this._acquireCommandEncoder( 'copyTextureToTexture_' + srcTexture.id + '_' + dstTexture.id );
 
 		const sourceGPU = this.get( srcTexture ).texture;
 		const destinationGPU = this.get( dstTexture ).texture;
@@ -2716,13 +2942,22 @@ class WebGPUBackend extends Backend {
 		_texelCopyTextureInfoDst.reset();
 		_extent3D.reset();
 
-		submit( this.device, encoder.finish() );
+		// mipmaps must be generated with the same command encoder so the copied texture
+		// data is not read before the copy has executed
 
 		if ( dstLevel === 0 && dstTexture.generateMipmaps ) {
 
-			this.textureUtils.generateMipmaps( dstTexture );
+			this.textureUtils.generateMipmaps( dstTexture, encoder );
 
 		}
+
+		if ( nested === true ) {
+
+			this._submitCommandEncoder( encoder );
+
+		}
+
+		// otherwise the copy is recorded into the shared frame command encoder and submitted by _flush()
 
 	}
 
@@ -2776,6 +3011,7 @@ class WebGPUBackend extends Backend {
 		}
 
 		let encoder;
+		let encoderNested = false;
 
 		if ( renderContextData.currentPass ) {
 
@@ -2785,9 +3021,9 @@ class WebGPUBackend extends Backend {
 
 		} else {
 
-			_commandEncoderDescriptor.label = 'copyFramebufferToTexture_' + texture.id;
-			encoder = this.device.createCommandEncoder( _commandEncoderDescriptor );
-			_commandEncoderDescriptor.reset();
+			const acquired = this._acquireCommandEncoder( 'copyFramebufferToTexture_' + texture.id );
+			encoder = acquired.commandEncoder;
+			encoderNested = acquired.nested;
 
 		}
 
@@ -2847,11 +3083,13 @@ class WebGPUBackend extends Backend {
 
 			}
 
-		} else {
+		} else if ( encoderNested === true ) {
 
-			submit( this.device, encoder.finish() );
+			this._submitCommandEncoder( encoder );
 
 		}
+
+		// otherwise the copy is recorded into the shared frame command encoder and submitted by _flush()
 
 	}
 
