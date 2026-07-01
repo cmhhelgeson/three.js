@@ -42,6 +42,8 @@ const _texelCopyTextureInfoDst = new GPUTexelCopyTextureInfo();
 const _viewDescriptor = new GPUTextureViewDescriptor();
 const _extent3D = new GPUExtent3D();
 
+let _numSubmits = 0;
+
 /**
  * A backend implementation targeting WebGPU.
  *
@@ -937,6 +939,8 @@ class WebGPUBackend extends Backend {
 		}
 
 		if ( this._commandBuffers.length > 0 ) {
+
+			console.log( _numSubmits ++ );
 
 			this.device.queue.submit( this._commandBuffers );
 			this._commandBuffers.length = 0;
