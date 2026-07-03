@@ -487,7 +487,7 @@ class WebGPUTextureUtils {
 			// not-yet-submitted command buffers may reference the old color buffer; destroying
 			// it now would make the whole deferred queue.submit() fail validation
 
-			backend._flush();
+			backend._submitCommandEncoders();
 
 			colorBuffer.destroy();
 
