@@ -482,7 +482,16 @@ class WebGPUTextureUtils {
 
 		let colorBuffer = colorTextureData.texture;
 
-		if ( colorBuffer ) colorBuffer.destroy();
+		if ( colorBuffer ) {
+
+			// not-yet-submitted command buffers may reference the old color buffer; destroying
+			// it now would make the whole deferred queue.submit() fail validation
+
+			backend._flush();
+
+			colorBuffer.destroy();
+
+		}
 
 		_textureDescriptor.label = 'colorBuffer';
 		_textureDescriptor.size.width = width;

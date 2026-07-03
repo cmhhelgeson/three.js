@@ -42,7 +42,6 @@ const _texelCopyTextureInfoDst = new GPUTexelCopyTextureInfo();
 const _viewDescriptor = new GPUTextureViewDescriptor();
 const _extent3D = new GPUExtent3D();
 
-let _numSubmits = 0;
 
 /**
  * A backend implementation targeting WebGPU.
@@ -940,10 +939,10 @@ class WebGPUBackend extends Backend {
 
 		if ( this._commandBuffers.length > 0 ) {
 
-			console.log( _numSubmits ++ );
-
 			this.device.queue.submit( this._commandBuffers );
 			this._commandBuffers.length = 0;
+
+			this.renderer.info.backend.encoderSubmissions ++;
 
 		}
 
@@ -1460,6 +1459,15 @@ class WebGPUBackend extends Backend {
 		// non-nested renders record into the shared frame command encoder, which is submitted
 		// once per frame by _flush() (via a microtask)
 
+		if ( this._passStack.length === 0 && ( this._commandEncoder !== null || this._commandBuffers.length > 0 ) ) {
+
+			// a flush attempted while this pass was still open was deferred and its microtask
+			// consumed; re-arm it now that no pass encoder is open (no-op if still scheduled)
+
+			this._scheduleFlush();
+
+		}
+
 		if ( occlusionQueryCount > 0 ) {
 
 			// occlusion results are read back on the CPU, so the recorded resolve must be
@@ -1919,6 +1927,15 @@ class WebGPUBackend extends Backend {
 		}
 
 		// non-nested compute records into the shared frame command encoder, submitted by _flush()
+
+		if ( this._passStack.length === 0 && ( this._commandEncoder !== null || this._commandBuffers.length > 0 ) ) {
+
+			// a flush attempted while this pass was still open was deferred and its microtask
+			// consumed; re-arm it now that no pass encoder is open (no-op if still scheduled)
+
+			this._scheduleFlush();
+
+		}
 
 	}
 
@@ -2433,6 +2450,11 @@ class WebGPUBackend extends Backend {
 	 */
 	destroyTexture( texture, isDefaultTexture = false ) {
 
+		// not-yet-submitted command buffers may reference this texture; destroying it now
+		// would make the whole deferred queue.submit() fail validation
+
+		this._flush();
+
 		this.textureUtils.destroyTexture( texture, isDefaultTexture );
 
 	}
@@ -2696,6 +2718,11 @@ class WebGPUBackend extends Backend {
 	 */
 	destroyUniformBuffer( uniformBuffer ) {
 
+		// not-yet-submitted command buffers may reference this buffer; destroying it now
+		// would make the whole deferred queue.submit() fail validation
+
+		this._flush();
+
 		const uniformBufferData = this.get( uniformBuffer );
 
 		uniformBufferData.buffer.destroy();
@@ -2825,6 +2852,11 @@ class WebGPUBackend extends Backend {
 	 * @param {BufferAttribute} attribute - The buffer attribute to destroy.
 	 */
 	destroyAttribute( attribute ) {
+
+		// not-yet-submitted command buffers may reference this buffer; destroying it now
+		// would make the whole deferred queue.submit() fail validation
+
+		this._flush();
 
 		this.attributeUtils.destroyAttribute( attribute );
 
