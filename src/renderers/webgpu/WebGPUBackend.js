@@ -190,6 +190,25 @@ class WebGPUBackend extends Backend {
 		this._commandEncoder = null;
 
 		/**
+		 * Array of encoded command sequences from successive commandEncoder.finish() calls.
+		 * Ideally, each frame passes all GPUCommandBuffers into a single device.queue.submit call
+		 *
+		 * @private
+		 * @type {Array<GPUCommandBuffer>}
+		 */
+		this._commandBuffers = [];
+
+		/**
+		 * The render contexts / compute groups whose pass encoder is currently open.
+		 * Its depth is used to detect nested rendering: when it is non-empty, a new
+		 * pass must be recorded on a dedicated command encoder.
+		 *
+		 * @private
+		 * @type {Array<Object>}
+		 */
+		this._passStack = [];
+
+		/**
 		 * Whether a microtask has already been scheduled to submit the frame's GPUCommandBuffers.
 		 *
 		 * @private
@@ -830,10 +849,23 @@ class WebGPUBackend extends Backend {
 	 * at a time.
 	 *
 	 * @private
+	 * @param {string} label - A debug label for the command encoder.
 	 * @return {{commandEncoder: GPUCommandEncoder, nested: boolean}} The command encoder
 	 * and whether it is a dedicated (nested) encoder that must be submitted on its own.
 	 */
-	_acquireCommandEncoder( ) {
+	_acquireCommandEncoder( label ) {
+
+		if ( this._passStack.length > 0 ) {
+
+			// nested: a parent pass encoder is still open, so a dedicated command encoder is required
+
+			_commandEncoderDescriptor.label = label + '_nested';
+			const commandEncoder = this.device.createCommandEncoder( _commandEncoderDescriptor );
+			_commandEncoderDescriptor.reset();
+
+			return { commandEncoder, nested: true };
+
+		}
 
 		if ( this._commandEncoder === null ) {
 
@@ -845,7 +877,24 @@ class WebGPUBackend extends Backend {
 
 		}
 
-		return { commandEncoder: this._commandEncoder };
+		return { commandEncoder: this._commandEncoder, nested: false };
+
+	}
+
+	/**
+	 * Finishes a dedicated (nested) command encoder and queues its command buffer for
+	 * the frame's single submit. Nested buffers are ordered before the frame command
+	 * encoder's buffer so their work executes first (a nested render typically produces
+	 * a resource consumed by the parent pass).
+	 *
+	 * @private
+	 * @param {GPUCommandEncoder} commandEncoder - The dedicated command encoder to finish.
+	 */
+	_finishCommandEncoder( commandEncoder ) {
+
+		this._commandBuffers.push( commandEncoder.finish() );
+
+		this._scheduleCommandEncoderSubmit();
 
 	}
 
@@ -881,10 +930,30 @@ class WebGPUBackend extends Backend {
 		// Refresh flag for next frame
 		this._submitScheduled = false;
 
+		if ( this._passStack.length > 0 ) {
+
+			// Defer _submitCommandEncoders till we are out of nested rendering context
+			// ERROR: submit is no longer scheduled now that we have done this
+
+			return;
+
+		}
+
 		if ( this._commandEncoder !== null ) {
 
-			this.device.queue.submit( [ this._commandEncoder.finish() ] );
+			// the frame command encoder is submitted last so its passes run after any nested work
+
+			this._commandBuffers.push( this._commandEncoder.finish( {
+				label: 'frame'
+			} ) );
 			this._commandEncoder = null;
+
+		}
+
+		if ( this._commandBuffers.length > 0 ) {
+
+			this.device.queue.submit( this._commandBuffers );
+			this._commandBuffers.length = 0;
 
 			this.renderer.info.backend.encoderSubmissions ++;
 
@@ -1050,18 +1119,83 @@ class WebGPUBackend extends Backend {
 
 		//
 
-		const { commandEncoder: encoder } = this._acquireCommandEncoder( 'renderContext_' + renderContext.id );
+		const { commandEncoder: encoder, nested } = this._acquireCommandEncoder( 'renderContext_' + renderContext.id );
+
+		// track this render context as holding an active pass slot so that any nested
+		// render started while it is open is given a dedicated command encoder
+
+		renderContextData.nested = nested;
+		this._passStack.push( renderContext );
+
+		// Layered render targets: prepare bundle encoders for each camera in the array camera.
+
+		if ( this._isRenderCameraDepthArray( renderContext ) === true ) {
+
+			const cameras = renderContext.camera.cameras;
+
+			if ( ! renderContextData.layerDescriptors || renderContextData.layerDescriptors.length !== cameras.length ) {
+
+				this._createArrayCameraLayerDescriptors( renderContext, renderContextData, descriptor, cameras );
+
+			} else {
+
+				this._updateArrayCameraLayerDescriptors( renderContext, renderContextData, cameras );
+
+			}
+
+			// Create bundle encoders for each layer
+			renderContextData.bundleEncoders = [];
+			renderContextData.bundleSets = [];
+
+			// Create separate bundle encoders for each camera in the array
+			for ( let i = 0; i < cameras.length; i ++ ) {
+
+				const bundleEncoder = this.pipelineUtils.createBundleEncoder(
+					renderContext,
+					'renderBundleArrayCamera_' + i
+				);
+
+				// Initialize state tracking for this bundle
+				const bundleSets = {
+					attributes: {},
+					bindingGroups: [],
+					pipeline: null,
+					index: null
+				};
+
+				renderContextData.bundleEncoders.push( bundleEncoder );
+				renderContextData.bundleSets.push( bundleSets );
+
+			}
+
+			// We'll complete the bundles in finishRender
+			renderContextData.currentPass = null;
+
+		} else {
+
+			const currentPass = encoder.beginRenderPass( descriptor );
+			renderContextData.currentPass = currentPass;
+
+			if ( renderContext.viewport ) {
+
+				this.updateViewport( renderContext );
+
+			}
+
+			if ( renderContext.scissor ) {
+
+				this.updateScissor( renderContext );
+
+			}
+
+		}
+
+		//
 
 		renderContextData.descriptor = descriptor;
 		renderContextData.encoder = encoder;
 		renderContextData.currentSets = { attributes: {}, bindingGroups: [], pipeline: null, index: null };
 		renderContextData.renderBundles = [];
-
-		// the render pass encoder is created lazily by prepareEncoders() on the first draw,
-		// so renders triggered from node updates can complete before this pass opens
-
-		renderContextData.currentPass = null;
-		renderContextData.passPrepared = false;
 
 	}
 
@@ -1070,13 +1204,14 @@ class WebGPUBackend extends Backend {
 	 *
 	 * @param {RenderContext} renderContext - The render context.
 	 * @param {Object} renderContextData - The render context data.
+	 * @param {Object} descriptor  - The render pass descriptor.
 	 * @param {ArrayCamera} cameras - The array camera.
 	 *
 	 * @private
 	 */
-	_createArrayCameraLayerDescriptors( renderContext, renderContextData, cameras ) {
+	_createArrayCameraLayerDescriptors( renderContext, renderContextData, descriptor, cameras ) {
 
-		const depthStencilAttachment = renderContextData.descriptor.depthStencilAttachment;
+		const depthStencilAttachment = descriptor.depthStencilAttachment;
 		renderContextData.layerDescriptors = [];
 
 		const depthTextureData = this.get( renderContext.depthTexture );
@@ -1088,10 +1223,10 @@ class WebGPUBackend extends Backend {
 
 		for ( let i = 0; i < cameras.length; i ++ ) {
 
-			const sourceAttachment = renderContextData.descriptor.colorAttachments[ 0 ];
+			const sourceAttachment = descriptor.colorAttachments[ 0 ];
 
 			const layerColorAttachment = new GPURenderPassColorAttachment();
-			layerColorAttachment.view = renderContextData.descriptor.colorAttachments[ i ].view;
+			layerColorAttachment.view = descriptor.colorAttachments[ i ].view;
 			layerColorAttachment.depthSlice = sourceAttachment.depthSlice;
 			layerColorAttachment.resolveTarget = sourceAttachment.resolveTarget;
 			layerColorAttachment.loadOp = sourceAttachment.loadOp;
@@ -1099,12 +1234,12 @@ class WebGPUBackend extends Backend {
 			layerColorAttachment.clearValue = sourceAttachment.clearValue;
 
 			const layerDescriptor = new GPURenderPassDescriptor();
-			layerDescriptor.label = renderContextData.descriptor.label;
-			layerDescriptor.occlusionQuerySet = renderContextData.descriptor.occlusionQuerySet;
-			layerDescriptor.timestampWrites = renderContextData.descriptor.timestampWrites;
+			layerDescriptor.label = descriptor.label;
+			layerDescriptor.occlusionQuerySet = descriptor.occlusionQuerySet;
+			layerDescriptor.timestampWrites = descriptor.timestampWrites;
 			layerDescriptor.colorAttachments.push( layerColorAttachment );
 
-			if ( renderContextData.descriptor.depthStencilAttachment ) {
+			if ( descriptor.depthStencilAttachment ) {
 
 				const layerIndex = i;
 
@@ -1223,11 +1358,6 @@ class WebGPUBackend extends Backend {
 		const renderContextData = this.get( renderContext );
 		const occlusionQueryCount = renderContext.occlusionQueryCount;
 
-		// if no draw call created the pass (e.g. an empty render list), create it now
-		// so its load operations (clears) still execute
-
-		this.prepareEncoders( renderContext, renderContextData );
-
 		if ( renderContextData.renderBundles.length > 0 ) {
 
 			renderContextData.currentPass.executeBundles( renderContextData.renderBundles );
@@ -1288,8 +1418,6 @@ class WebGPUBackend extends Backend {
 
 		  renderContextData.currentPass.end();
 
-			renderContextData.currentPass = null;
-
 		}
 
 		if ( occlusionQueryCount > 0 ) {
@@ -1330,10 +1458,21 @@ class WebGPUBackend extends Backend {
 
 		}
 
+		this._passStack.pop();
+
+		if ( renderContextData.nested === true ) {
+
+			// nested render: queue its dedicated command buffer for the frame's single submit
+			// (ordered before the frame command encoder's buffer)
+
+			this._finishCommandEncoder( renderContextData.encoder );
+
+		}
+
 		// non-nested renders record into the shared frame command encoder, which is submitted
 		// once per frame by _submitCommandEncoders() (via a microtask)
 
-		if ( this._commandEncoder !== null ) {
+		if ( this._passStack.length === 0 && ( this._commandEncoder !== null || this._commandBuffers.length > 0 ) ) {
 
 			// a flush attempted while this pass was still open was deferred and its microtask
 			// consumed; re-arm it now that no pass encoder is open (no-op if still scheduled)
@@ -1615,7 +1754,7 @@ class WebGPUBackend extends Backend {
 
 		//
 
-		const { commandEncoder: encoder } = this._acquireCommandEncoder( 'clear' );
+		const { commandEncoder: encoder, nested } = this._acquireCommandEncoder( 'clear' );
 
 		const currentPass = encoder.beginRenderPass( {
 			colorAttachments,
@@ -1623,6 +1762,12 @@ class WebGPUBackend extends Backend {
 		} );
 
 		currentPass.end();
+
+		if ( nested === true ) {
+
+			this._finishCommandEncoder( encoder );
+
+		}
 
 		// otherwise the clear is recorded into the shared frame command encoder and submitted by _submitCommandEncoders()
 
@@ -1648,7 +1793,10 @@ class WebGPUBackend extends Backend {
 
 		this.initTimestampQuery( TimestampQuery.COMPUTE, this.getTimestampUID( computeGroup ), _computePassDescriptor );
 
-		const { commandEncoder } = this._acquireCommandEncoder( label );
+		const { commandEncoder, nested } = this._acquireCommandEncoder( label );
+
+		groupGPU.nested = nested;
+		this._passStack.push( computeGroup );
 
 		groupGPU.cmdEncoderGPU = commandEncoder;
 		groupGPU.passEncoderGPU = commandEncoder.beginComputePass( _computePassDescriptor );
@@ -1781,9 +1929,19 @@ class WebGPUBackend extends Backend {
 
 		groupData.passEncoderGPU.end();
 
+		this._passStack.pop();
+
+		if ( groupData.nested === true ) {
+
+			// nested compute: queue its dedicated command buffer for the frame's single submit
+
+			this._finishCommandEncoder( groupData.cmdEncoderGPU );
+
+		}
+
 		// non-nested compute records into the shared frame command encoder, submitted by _submitCommandEncoders()
 
-		if ( this._commandEncoder !== null ) {
+		if ( this._passStack.length === 0 && ( this._commandEncoder !== null || this._commandBuffers.length > 0 ) ) {
 
 			// a flush attempted while this pass was still open was deferred and its microtask
 			// consumed; re-arm it now that no pass encoder is open (no-op if still scheduled)
@@ -1972,87 +2130,6 @@ class WebGPUBackend extends Backend {
 
 	}
 
-	/**
-	 * Creates the render pass encoder (or the per-layer bundle encoders for layered
-	 * render targets) for the given render context. Called lazily by the first draw
-	 * of the render context so renders triggered from node updates can complete on
-	 * the shared command encoder before this pass opens. Subsequent calls are a no-op:
-	 * draws record into the already open pass.
-	 *
-	 * @param {RenderContext} renderContext - The render context.
-	 * @param {Object} renderContextData - The render context data.
-	 */
-	prepareEncoders( renderContext, renderContextData ) {
-
-		if ( renderContextData.passPrepared === true ) return;
-
-		renderContextData.passPrepared = true;
-
-		// Layered render targets: prepare bundle encoders for each camera in the array camera.
-
-		if ( this._isRenderCameraDepthArray( renderContext ) === true ) {
-
-			const cameras = renderContext.camera.cameras;
-
-			if ( ! renderContextData.layerDescriptors || renderContextData.layerDescriptors.length !== cameras.length ) {
-
-				this._createArrayCameraLayerDescriptors( renderContext, renderContextData, cameras );
-
-			} else {
-
-				this._updateArrayCameraLayerDescriptors( renderContext, renderContextData, cameras );
-
-			}
-
-			// Create bundle encoders for each layer
-			renderContextData.bundleEncoders = [];
-			renderContextData.bundleSets = [];
-
-			// Create separate bundle encoders for each camera in the array
-			for ( let i = 0; i < cameras.length; i ++ ) {
-
-				const bundleEncoder = this.pipelineUtils.createBundleEncoder(
-					renderContext,
-					'renderBundleArrayCamera_' + i
-				);
-
-				// Initialize state tracking for this bundle
-				const bundleSets = {
-					attributes: {},
-					bindingGroups: [],
-					pipeline: null,
-					index: null
-				};
-
-				renderContextData.bundleEncoders.push( bundleEncoder );
-				renderContextData.bundleSets.push( bundleSets );
-
-			}
-
-			// We'll complete the bundles in finishRender
-			renderContextData.currentPass = null;
-
-		} else {
-
-			const currentPass = renderContextData.encoder.beginRenderPass( renderContextData.descriptor );
-			renderContextData.currentPass = currentPass;
-
-			if ( renderContext.viewport ) {
-
-				this.updateViewport( renderContext );
-
-			}
-
-			if ( renderContext.scissor ) {
-
-				this.updateScissor( renderContext );
-
-			}
-
-		}
-
-	}
-
 	// render object
 
 	/**
@@ -2065,9 +2142,6 @@ class WebGPUBackend extends Backend {
 
 		const { object, context, pipeline } = renderObject;
 		const renderContextData = this.get( context );
-
-		this.prepareEncoders( context, renderContextData );
-
 		const pipelineData = this.get( pipeline );
 		const pipelineGPU = pipelineData.pipeline;
 
@@ -2881,7 +2955,7 @@ class WebGPUBackend extends Backend {
 
 		}
 
-		const { commandEncoder: encoder } = this._acquireCommandEncoder( 'copyTextureToTexture_' + srcTexture.id + '_' + dstTexture.id );
+		const { commandEncoder: encoder, nested } = this._acquireCommandEncoder( 'copyTextureToTexture_' + srcTexture.id + '_' + dstTexture.id );
 
 		const sourceGPU = this.get( srcTexture ).texture;
 		const destinationGPU = this.get( dstTexture ).texture;
@@ -2918,6 +2992,12 @@ class WebGPUBackend extends Backend {
 		if ( dstLevel === 0 && dstTexture.generateMipmaps ) {
 
 			this.textureUtils.generateMipmaps( dstTexture, encoder );
+
+		}
+
+		if ( nested === true ) {
+
+			this._finishCommandEncoder( encoder );
 
 		}
 
@@ -2975,6 +3055,7 @@ class WebGPUBackend extends Backend {
 		}
 
 		let encoder;
+		let encoderNested = false;
 
 		if ( renderContextData.currentPass ) {
 
@@ -2986,6 +3067,7 @@ class WebGPUBackend extends Backend {
 
 			const acquired = this._acquireCommandEncoder( 'copyFramebufferToTexture_' + texture.id );
 			encoder = acquired.commandEncoder;
+			encoderNested = acquired.nested;
 
 		}
 
@@ -3044,6 +3126,10 @@ class WebGPUBackend extends Backend {
 				this.updateScissor( renderContext );
 
 			}
+
+		} else if ( encoderNested === true ) {
+
+			this._finishCommandEncoder( encoder );
 
 		}
 
