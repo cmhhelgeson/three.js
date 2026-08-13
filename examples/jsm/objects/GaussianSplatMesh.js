@@ -44,7 +44,7 @@ import {
 	getSphericalHarmonicsDegree
 } from '../utils/GaussianSplatUtils.js';
 
-const BIN_COUNT = 4096;
+const BIN_COUNT = 4096 * 32;
 const WORKGROUP_SIZE = 256;
 const SORT_DIRECTION_THRESHOLD = 0.9995;
 const SORT_POSITION_THRESHOLD = 0.0025;
