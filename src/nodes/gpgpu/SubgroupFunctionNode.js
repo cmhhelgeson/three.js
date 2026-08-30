@@ -99,6 +99,7 @@ class SubgroupFunctionNode extends TempNode {
 
 		// See justification for https://github.com/mrdoob/three.js/pull/33319
 		builder.allowEarlyReturns = false;
+		console.log( 'test for build in low_bin_count' );
 
 	}
 
