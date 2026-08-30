@@ -43,7 +43,9 @@ class CountingSort {
 	 * @param {number} [options.binCount=4096] - The number of bins/buckets the sort key is quantized into. Larger values improve sort accuracy at the cost of a longer (but still single-pass) prefix sum.
 	 * @param {number} [options.workgroupSize=256] - The workgroup size of the compute shaders executed during the sort.
 	 */
-	constructor( count, { binCount = 4096, workgroupSize = 256 } = {} ) {
+	constructor( count, { binCount = 256, workgroupSize = 256 } = {} ) {
+
+		console.log( binCount );
 
 		/**
 		 * The number of elements to sort.

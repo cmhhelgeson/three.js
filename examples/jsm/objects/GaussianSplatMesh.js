@@ -47,7 +47,7 @@ import {
 	getSphericalHarmonicsDegree
 } from '../utils/GaussianSplatUtils.js';
 
-const BIN_COUNT = 4096;
+const BIN_COUNT = 1024;
 const WORKGROUP_SIZE = 256;
 const SORT_DIRECTION_THRESHOLD = 0.9995;
 const KERNEL_2D_SIZE = 0.3;
@@ -109,7 +109,7 @@ class GaussianSplatMesh extends Mesh {
 		} );
 		const localCameraPosition = uniform( new Vector3() );
 		const sphericalHarmonicsComputeNode = createSphericalHarmonicsComputeNode( buffers, localCameraPosition );
-		const sort = new CountingSort( count, { binCount: BIN_COUNT, workgroupSize: WORKGROUP_SIZE } );
+		const sort = new CountingSort( count, { binCount: 256, workgroupSize: WORKGROUP_SIZE } );
 		const materialNodes = createMaterialNodes( buffers, sort, localCameraPosition );
 		const material = createMaterial( materialNodes.vertexNode, materialNodes.fragmentNode );
 
