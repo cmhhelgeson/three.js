@@ -92,7 +92,7 @@ export function seededUint32Array( count, max, seed = DEFAULT_SEED ) {
 	const random = mulberry32( seed );
 	const array = new Uint32Array( count );
 
-	for ( let i = 0; i < count; i ++ ) array[ i ] = Math.floor( random() * max );
+	for ( let i = 0; i < count; i ++ ) array[ i ] = 1;
 
 	return array;
 

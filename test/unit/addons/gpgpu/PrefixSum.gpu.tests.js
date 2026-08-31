@@ -55,6 +55,47 @@ function cpuPrefixSum( input, isInclusive ) {
 
 }
 
+// Reports where the GPU result diverges from the CPU reference. QUnit's deepEqual dumps both
+// arrays in full on failure, which is unreadable at these sizes and never says which index
+// broke -- so compare here and put the offending indices in the assertion message instead.
+function reportMismatches( assert, actual, expected, label ) {
+
+	if ( actual.length !== expected.length ) {
+
+		assert.ok( false, `${ label } - got ${ actual.length } elements, expected ${ expected.length }` );
+		return;
+
+	}
+
+	const mismatches = [];
+
+	for ( let i = 0; i < expected.length; i ++ ) {
+
+		if ( actual[ i ] !== expected[ i ] ) mismatches.push( i );
+
+	}
+
+	if ( mismatches.length === 0 ) {
+
+		assert.ok( true, `${ label } (${ expected.length } elements)` );
+		return;
+
+	}
+
+	const at = ( i ) => `[${ i }] expected ${ expected[ i ] }, got ${ actual[ i ] }`;
+	const shown = mismatches.slice( 0, 16 ).join( ', ' );
+	const ellipsis = mismatches.length > 16 ? ', ...' : '';
+
+	assert.ok(
+		false,
+		`${ label } - ${ mismatches.length } of ${ expected.length } elements differ. ` +
+		`First mismatch ${ at( mismatches[ 0 ] ) }. ` +
+		`Last mismatch ${ at( mismatches[ mismatches.length - 1 ] ) }. ` +
+		`Indices: ${ shown }${ ellipsis }`
+	);
+
+}
+
 export default QUnit.module( 'Addons', () => {
 
 	QUnit.module( 'GPGPU', () => {
@@ -81,14 +122,11 @@ export default QUnit.module( 'Addons', () => {
 					const input = seededUint32Array( n, 10 );
 					const expected = cpuPrefixSum( input, false );
 
-					const sum = new PrefixSum( input.slice(), { isInclusive: false } );
+					const sum = new PrefixSum( input.slice(), { isInclusive: false, workgroupSize: 256 } );
 					sum.compute( renderer );
 					const output = new Uint32Array( await renderer.getArrayBufferAsync( sum.outputAttribute ) );
 
-					assert.deepEqual(
-						Array.from( output ), Array.from( expected ),
-						'matches a CPU-computed exclusive prefix sum'
-					);
+					reportMismatches( assert, output, expected, 'matches a CPU-computed exclusive prefix sum' );
 
 					renderer.dispose();
 

@@ -215,9 +215,47 @@ function main() {
 		cyan( `# todo ${stats.todo}` );
 		red( `# fail ${stats.failed}` );
 
+		// Print the name of each failing test plus its failed assertion messages.
+		// Without this only the aggregate `# fail N` count above is visible, which
+		// says nothing about which test broke.
+		if ( failures.length > 0 ) {
+
+			red( '' );
+			red( '# failing tests:' );
+
+			for ( const failure of failures ) {
+
+				red( `  ✗ ${failure.name}` );
+
+				for ( const message of failure.messages ) {
+
+					yellow( `      ${message === undefined ? '(no message)' : message}` );
+
+				}
+
+			}
+
+		}
+
 		if ( failOnConsoleErrors ) {
 
 			red( `# console errors ${consoleErrors.length}` );
+
+		}
+
+		// Print the captured console errors themselves, not just the count -- with
+		// --failOnConsoleErrors these can fail the run on their own, and the count
+		// alone gives nothing to debug from.
+		if ( failOnConsoleErrors && consoleErrors.length > 0 ) {
+
+			red( '' );
+			red( '# console errors:' );
+
+			for ( const consoleError of consoleErrors ) {
+
+				yellow( `  ${consoleError}` );
+
+			}
 
 		}
 
