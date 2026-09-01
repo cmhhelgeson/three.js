@@ -680,7 +680,7 @@ export class PrefixSum {
 					// We can be sure that this only happens on the last invocation
 					// since the write indices are determined by the startThread,
 					// whose value only ever reaches the end on last workgroup -> last subgroup -> last invoke of subgroup
-					If( invocationLocalIndex.notEqual( this.dispatchSize - 1 ), () => {
+					If( outputIndex.lessThan( this.count - 1 ), () => {
 
 						unvectorizedOutputBuffer.element( outputIndex.add( 3 ) ).assign( outputValueToWrite.w );
 

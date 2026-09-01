@@ -58,7 +58,7 @@ function cpuPrefixSum( input, isInclusive ) {
 // Reports where the GPU result diverges from the CPU reference. QUnit's deepEqual dumps both
 // arrays in full on failure, which is unreadable at these sizes and never says which index
 // broke -- so compare here and put the offending indices in the assertion message instead.
-function reportMismatches( assert, actual, expected, label ) {
+function reportMismatches( assert, actual, expected, sum, label ) {
 
 	if ( actual.length !== expected.length ) {
 
@@ -88,7 +88,7 @@ function reportMismatches( assert, actual, expected, label ) {
 
 	assert.ok(
 		false,
-		`${ label } - ${ mismatches.length } of ${ expected.length } elements differ. ` +
+		`${ label } - ${ mismatches.length } of ${ expected.length } elements differ. ${sum.dispatchSize} invocations dispatched.` +
 		`First mismatch ${ at( mismatches[ 0 ] ) }. ` +
 		`Last mismatch ${ at( mismatches[ mismatches.length - 1 ] ) }. ` +
 		`Indices: ${ shown }${ ellipsis }`
@@ -126,7 +126,7 @@ export default QUnit.module( 'Addons', () => {
 					sum.compute( renderer );
 					const output = new Uint32Array( await renderer.getArrayBufferAsync( sum.outputAttribute ) );
 
-					reportMismatches( assert, output, expected, 'matches a CPU-computed exclusive prefix sum' );
+					reportMismatches( assert, output, expected, sum, 'matches a CPU-computed exclusive prefix sum' );
 
 					renderer.dispose();
 
