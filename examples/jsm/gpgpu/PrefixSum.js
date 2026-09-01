@@ -689,7 +689,7 @@ export class PrefixSum {
 
 				} else {
 
-					// No need to worry about overwrites for inclsuive
+					// No need to worry about overwrites for inclusive
 					unvectorizedOutputBuffer.element( outputIndex ).assign( outputValueToWrite.x );
 					unvectorizedOutputBuffer.element( outputIndex.add( 1 ) ).assign( outputValueToWrite.y );
 					unvectorizedOutputBuffer.element( outputIndex.add( 2 ) ).assign( outputValueToWrite.z );
