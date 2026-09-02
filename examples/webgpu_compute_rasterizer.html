@@ -1107,12 +1107,15 @@
 
 				}
 
-				// Compute & Render
+				// Compute & Render (batch compute calls together)
+				renderer.autoSubmit = false;
 				renderer.compute( computeClear );
 				renderer.compute( computeFrustum );
 				renderer.compute( computeDispatch );
 				renderer.compute( computeRasterize );
 				renderer.compute( computeHWArgs );
+				renderer.submit();
+				renderer.autoSubmit = true;
 
 				const rasterMode = options.Rasterizer;
 
