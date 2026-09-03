@@ -329,10 +329,7 @@ class CanvasTarget extends EventDispatcher {
 	}
 
 	/**
-	 * Dispatches the event signalling that the canvas is about to be resized, while
-	 * its current drawing buffer is still valid. Resizing the canvas destroys the
-	 * texture returned by `getCurrentTexture()`, so a backend that defers its submit
-	 * has to flush any recorded work that targets it before that happens.
+	 * Dispatches the before resize event.
 	 *
 	 * @private
 	 */

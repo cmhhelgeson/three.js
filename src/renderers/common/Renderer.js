@@ -292,6 +292,13 @@ class Renderer {
 		 * @type {Function}
 		 */
 		this._onCanvasTargetResize = this._onCanvasTargetResize.bind( this );
+
+		/**
+		 * OnCanvasTargetBeforeResize callback function.
+		 *
+		 * @private
+		 * @type {Function}
+		 */
 		this._onCanvasTargetBeforeResize = this._onCanvasTargetBeforeResize.bind( this );
 
 		/**
@@ -3998,10 +4005,8 @@ class Renderer {
 	}
 
 	/**
-	 * Callback invoked just before the canvas is resized, while the current drawing
-	 * buffer is still valid. Any work already recorded against it must be submitted
-	 * now: the resize destroys that texture, and submitting afterwards would fail
-	 * validation with a destroyed texture.
+	 * Callback for before the canvas is resized.
+	 * Must submit any render work done with the previous canvas context.
 	 *
 	 * @private
 	 */
