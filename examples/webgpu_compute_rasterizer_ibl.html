@@ -148,6 +148,7 @@
 			async function init() {
 
 				renderer = new THREE.WebGPURenderer();
+				renderer.autoSubmit = false;
 				renderer.toneMapping = THREE.ACESFilmicToneMapping;
 				renderer.setPixelRatio( window.devicePixelRatio );
 				renderer.setSize( window.innerWidth, window.innerHeight );
@@ -489,6 +490,8 @@
 				parameterGroup.add( lodThresholdUniform, 'value', 1, 15.0 ).name( 'LOD Threshold' ).step( 0.1 );
 
 				parameterGroup.add( timeScale, 'value', 0.0, 1.0 ).name( 'Animation Speed' );
+
+				parameterGroup.add( renderer, 'autoSubmit' );
 
 				// Packed visibility buffers — depth in the high bits, payload in the low bits,
 				// so a single atomicMax resolves the depth test and the payload write together
@@ -1764,6 +1767,8 @@
 				// Present (tone mapping + output color space apply on the canvas)
 				renderer.setRenderTarget( null );
 				blitQuad.render( renderer );
+
+				renderer.submit();
 
 			}
 

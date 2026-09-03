@@ -6,17 +6,16 @@ import { GPUFeatureName, GPULoadOp, GPUStoreOp, GPUIndexFormat, GPUTextureViewDi
 import WGSLNodeBuilder from './nodes/WGSLNodeBuilder.js';
 import Backend from '../common/Backend.js';
 
-import WebGPUUtils, { submit } from './utils/WebGPUUtils.js';
+import WebGPUUtils from './utils/WebGPUUtils.js';
 import WebGPUAttributeUtils from './utils/WebGPUAttributeUtils.js';
 import WebGPUBindingUtils from './utils/WebGPUBindingUtils.js';
 import WebGPUCapabilities from './utils/WebGPUCapabilities.js';
 import WebGPUPipelineUtils from './utils/WebGPUPipelineUtils.js';
 import WebGPUTextureUtils from './utils/WebGPUTextureUtils.js';
 
-import { WebGPUCoordinateSystem, TimestampQuery, REVISION, HalfFloatType, Compatibility, CustomBlending } from '../../constants.js';
-import { Color } from '../../math/Color.js';
+import { WebGPUCoordinateSystem, TimestampQuery, REVISION, HalfFloatType, Compatibility } from '../../constants.js';
 import WebGPUTimestampQueryPool from './utils/WebGPUTimestampQueryPool.js';
-import { error, warnOnce } from '../../utils.js';
+import { error } from '../../utils.js';
 
 import GPUBufferDescriptor from './descriptors/GPUBufferDescriptor.js';
 import GPUCommandEncoderDescriptor from './descriptors/GPUCommandEncoderDescriptor.js';
@@ -28,12 +27,10 @@ import GPURenderPassDepthStencilAttachment from './descriptors/GPURenderPassDept
 import GPURenderPassDescriptor from './descriptors/GPURenderPassDescriptor.js';
 import GPURenderPassTimestampWrites from './descriptors/GPURenderPassTimestampWrites.js';
 import GPUTexelCopyTextureInfo from './descriptors/GPUTexelCopyTextureInfo.js';
-import GPUTextureDescriptor from './descriptors/GPUTextureDescriptor.js';
 import GPUTextureViewDescriptor from './descriptors/GPUTextureViewDescriptor.js';
 import GPUExtent3D from './descriptors/GPUExtent3D.js';
 
 const _clearValue = { r: 0, g: 0, b: 0, a: 1 };
-const _blendConstant = { r: 0, g: 0, b: 0, a: 0 };
 const _bufferDescriptor = new GPUBufferDescriptor();
 const _commandEncoderDescriptor = new GPUCommandEncoderDescriptor();
 const _computePassDescriptor = new GPUComputePassDescriptor();
@@ -42,9 +39,9 @@ const _shaderModuleDescriptor = new GPUShaderModuleDescriptor();
 const _renderPassTimestampWrites = new GPURenderPassTimestampWrites();
 const _texelCopyTextureInfoSrc = new GPUTexelCopyTextureInfo();
 const _texelCopyTextureInfoDst = new GPUTexelCopyTextureInfo();
-const _textureDescriptor = new GPUTextureDescriptor();
 const _viewDescriptor = new GPUTextureViewDescriptor();
 const _extent3D = new GPUExtent3D();
+
 
 /**
  * A backend implementation targeting WebGPU.
@@ -175,6 +172,39 @@ class WebGPUBackend extends Backend {
 		 * @type {Map<number,GPUBuffer>}
 		 */
 		this.occludedResolveCache = new Map();
+
+		// command submission batching
+
+		/**
+		 * Command buffers finished this frame and awaiting submission. Every pass owns
+		 * its own command encoder and pushes the resulting command buffer here as it
+		 * finishes, so this array is always in finish order and never holds an
+		 * unfinished encoder. The frame's single queue.submit() drains it.
+		 *
+		 * @private
+		 * @type {Array<GPUCommandBuffer>}
+		 */
+		this._finishedCommandBuffers = [];
+
+		/**
+		 * Whether a microtask has already been scheduled to submit the frame's GPUCommandBuffers.
+		 *
+		 * @private
+		 * @type {boolean}
+		 */
+		this._submitScheduled = false;
+
+		/**
+		 * GPU resources whose destruction has been deferred until the command buffers
+		 * that reference them have been submitted. Destroying a texture or buffer that
+		 * is still recorded into an unsubmitted command encoder makes the following
+		 * submit fail validation. Batching makes that reachable: a resize or a dispose
+		 * can now land between recording a pass and submitting it.
+		 *
+		 * @private
+		 * @type {Array<(GPUTexture|GPUBuffer|GPUQuerySet)>}
+		 */
+		this._resourcesToDestroy = [];
 
 		// compatibility checks
 
@@ -310,14 +340,13 @@ class WebGPUBackend extends Backend {
 	 */
 	setXRRenderTargetTextures( renderTarget, colorTexture, viewDescriptors = null ) {
 
-		// Update the external XR texture without replacing the cached MSAA attachments.
-		const textureData = this.get( renderTarget.texture );
-
-		textureData.texture = colorTexture;
-		textureData.format = colorTexture.format;
-		textureData.externalTexture = true;
-		textureData.xrViewDescriptors = viewDescriptors;
-		textureData.initialized = true;
+		this.set( renderTarget.texture, {
+			texture: colorTexture,
+			format: colorTexture.format,
+			externalTexture: true,
+			xrViewDescriptors: viewDescriptors,
+			initialized: true
+		} );
 
 	}
 
@@ -412,6 +441,11 @@ class WebGPUBackend extends Backend {
 	 */
 	async getArrayBufferAsync( attribute, target = null, offset = 0, count = - 1 ) {
 
+		// if called between render/compute calls, submit commandEncoders early so
+		// buffer data is valid
+
+		this.submit();
+
 		return await this.attributeUtils.getArrayBufferAsync( attribute, target, offset, count );
 
 	}
@@ -435,7 +469,7 @@ class WebGPUBackend extends Backend {
 	 * pass descriptor even when rendering directly to screen.
 	 *
 	 * @private
-	 * @return {GPURenderPassDescriptor} The render pass descriptor.
+	 * @return {Object} The render pass descriptor.
 	 */
 	_getDefaultRenderPassDescriptor() {
 
@@ -534,81 +568,6 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * Returns multisampled color textures for an external render target.
-	 *
-	 * @private
-	 * @param {RenderContext} renderContext - The render context.
-	 * @param {Object} textureData - The backend data for the external texture.
-	 * @param {number} count - The number of textures to create.
-	 * @return {?Array<GPUTexture>} The multisampled textures.
-	 */
-	_getExternalMSAATextures( renderContext, textureData, count ) {
-
-		const samples = this.utils.getSampleCount( renderContext.sampleCount );
-
-		if ( samples === 1 ) {
-
-			if ( textureData.msaaTextures !== undefined ) {
-
-				for ( const texture of textureData.msaaTextures ) texture.destroy();
-
-				textureData.msaaTextures = undefined;
-
-			}
-
-			return null;
-
-		}
-
-		const renderTarget = renderContext.renderTarget;
-		const width = renderTarget.width;
-		const height = renderTarget.height;
-		const format = textureData.format;
-
-		if ( textureData.msaaTextures === undefined ||
-			textureData.msaaTextures.length !== count ||
-			textureData.msaaWidth !== width ||
-			textureData.msaaHeight !== height ||
-			textureData.msaaSamples !== samples ||
-			textureData.msaaFormat !== format ) {
-
-			if ( textureData.msaaTextures !== undefined ) {
-
-				for ( const texture of textureData.msaaTextures ) texture.destroy();
-
-			}
-
-			_textureDescriptor.size.width = width;
-			_textureDescriptor.size.height = height;
-			_textureDescriptor.sampleCount = samples;
-			_textureDescriptor.format = format;
-			// Layered rendering can resume after a framebuffer copy,
-			// so these attachments must support loading.
-			_textureDescriptor.usage = GPUTextureUsage.RENDER_ATTACHMENT;
-
-			textureData.msaaTextures = [];
-
-			for ( let i = 0; i < count; i ++ ) {
-
-				_textureDescriptor.label = renderTarget.texture.name + '-msaa-' + i;
-				textureData.msaaTextures.push( this.device.createTexture( _textureDescriptor ) );
-
-			}
-
-			_textureDescriptor.reset();
-
-			textureData.msaaWidth = width;
-			textureData.msaaHeight = height;
-			textureData.msaaSamples = samples;
-			textureData.msaaFormat = format;
-
-		}
-
-		return textureData.msaaTextures;
-
-	}
-
-	/**
 	 * Creates attachment views for an external texture render target.
 	 *
 	 * @private
@@ -620,19 +579,14 @@ class WebGPUBackend extends Backend {
 
 		const textureViews = [];
 		const camera = renderContext.camera;
-		const viewDescriptors = textureData.xrViewDescriptors;
-		const viewCount = Math.max( viewDescriptors?.length || 0, renderContext.activeCubeFace + 1, 1 );
-		const msaaTextures = this._getExternalMSAATextures( renderContext, textureData, viewCount );
 
-		if ( viewDescriptors && camera !== null && camera.isArrayCamera === true ) {
+		if ( textureData.xrViewDescriptors && camera !== null && camera.isArrayCamera === true ) {
 
-			for ( let i = 0; i < viewDescriptors.length; i ++ ) {
-
-				const textureView = textureData.texture.createView( viewDescriptors[ i ] );
+			for ( let i = 0; i < textureData.xrViewDescriptors.length; i ++ ) {
 
 				textureViews.push( {
-					view: msaaTextures !== null ? msaaTextures[ i ].createView() : textureView,
-					resolveTarget: msaaTextures !== null && renderContext.renderTarget.resolveColorBuffer === true ? textureView : undefined,
+					view: textureData.texture.createView( textureData.xrViewDescriptors[ i ] ),
+					resolveTarget: undefined,
 					depthSlice: undefined
 				} );
 
@@ -640,16 +594,13 @@ class WebGPUBackend extends Backend {
 
 		} else {
 
-			const layer = renderContext.activeCubeFace;
-			const textureView = textureData.texture.createView( {
-				dimension: GPUTextureViewDimension.TwoD,
-				baseArrayLayer: layer,
-				arrayLayerCount: 1
-			} );
-
 			textureViews.push( {
-				view: msaaTextures !== null ? msaaTextures[ layer ].createView() : textureView,
-				resolveTarget: msaaTextures !== null && renderContext.renderTarget.resolveColorBuffer === true ? textureView : undefined,
+				view: textureData.texture.createView( {
+					dimension: GPUTextureViewDimension.TwoD,
+					baseArrayLayer: renderContext.activeCubeFace,
+					arrayLayerCount: 1
+				} ),
+				resolveTarget: undefined,
 				depthSlice: undefined
 			} );
 
@@ -737,10 +688,9 @@ class WebGPUBackend extends Backend {
 							_viewDescriptor.dimension = GPUTextureViewDimension.TwoD;
 
 							const textureView = textureData.texture.createView( _viewDescriptor );
-							const msaaTexture = textureData.msaaTextures?.[ layer ];
 							textureViews.push( {
-								view: msaaTexture !== undefined ? msaaTexture.createView() : textureView,
-								resolveTarget: msaaTexture !== undefined && renderTarget.resolveColorBuffer === true ? textureView : undefined,
+								view: textureView,
+								resolveTarget: undefined,
 								depthSlice: undefined
 							} );
 
@@ -763,12 +713,7 @@ class WebGPUBackend extends Backend {
 					if ( textureData.msaaTexture !== undefined ) {
 
 						view = textureData.msaaTexture.createView();
-						resolveTarget = renderTarget.resolveColorBuffer === true ? textureView : undefined;
-
-					} else if ( textureData.msaaTextures !== undefined ) {
-
-						view = textureData.msaaTextures[ renderContext.activeCubeFace ].createView();
-						resolveTarget = renderTarget.resolveColorBuffer === true ? textureView : undefined;
+						resolveTarget = textureView;
 
 					} else {
 
@@ -821,8 +766,7 @@ class WebGPUBackend extends Backend {
 				}
 
 				const depthStencilAttachment = new GPURenderPassDepthStencilAttachment();
-				const msaaDepthTexture = depthTextureData.msaaTextures?.[ renderContext.activeCubeFace ];
-				depthStencilAttachment.view = msaaDepthTexture !== undefined ? msaaDepthTexture.createView() : depthTextureData.texture.createView( _viewDescriptor );
+				depthStencilAttachment.view = depthTextureData.texture.createView( _viewDescriptor );
 				descriptorBase.depthStencilAttachment = depthStencilAttachment;
 
 				_viewDescriptor.reset();
@@ -874,6 +818,90 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
+	 * Creates a command encoder for a single pass or copy. Every pass owns its own
+	 * encoder, which sidesteps the rule that a command encoder may only have one open
+	 * pass encoder at a time and so removes any need to treat a nested pass specially.
+	 *
+	 * @private
+	 * @param {string} label - A debug label for the command encoder.
+	 * @return {GPUCommandEncoder} The command encoder.
+	 */
+	_acquireCommandEncoder( label ) {
+
+		_commandEncoderDescriptor.label = label;
+
+		const commandEncoder = this.device.createCommandEncoder( _commandEncoderDescriptor );
+
+		_commandEncoderDescriptor.reset();
+
+		return commandEncoder;
+
+	}
+
+	/**
+	 * Finishes a command encoder and queues its command buffer for the frame's single
+	 * submit. Buffers are queued in the order their encoders finish, so an inner pass
+	 * always executes before the outer pass that consumes its result.
+	 *
+	 * @private
+	 * @param {GPUCommandEncoder} commandEncoder - The command encoder to finish.
+	 */
+	_finishCommandEncoder( commandEncoder ) {
+
+		this._finishedCommandBuffers.push( commandEncoder.finish() );
+
+		this._scheduleCommandEncoderSubmit();
+
+	}
+
+	/**
+	 * Schedules a microtask that submits the frame's finished command buffers with a
+	 * single queue.submit(). The microtask runs as soon as the current callback returns
+	 * to the event loop, which is still inside the frame that recorded the work.
+	 *
+	 * @private
+	 */
+	_scheduleCommandEncoderSubmit() {
+
+		// with autoSubmit disabled the application drives submission via renderer.submit()
+
+		if ( this.renderer.autoSubmit && this._submitScheduled === false ) {
+
+			this._submitScheduled = true;
+
+			queueMicrotask( () => this.submit() );
+
+		}
+
+	}
+
+	/**
+	 * Destroys a GPU resource, deferring the destruction whenever a command encoder or
+	 * command buffer of the current frame might still reference it. Deferred resources
+	 * are destroyed by {@link WebGPUBackend#submit} directly after the
+	 * frame has been submitted.
+	 *
+	 * @param {?(GPUTexture|GPUBuffer|GPUQuerySet)} resource - The resource to destroy.
+	 */
+	destroyResource( resource ) {
+
+		if ( ! resource ) return;
+
+		if ( this._finishedCommandBuffers.length === 0 ) {
+
+			// nothing is queued, so no pending submit can reference the resource
+
+			resource.destroy();
+
+		} else {
+
+			this._resourcesToDestroy.push( resource );
+
+		}
+
+	}
+
+	/**
 	 * This method is executed at the beginning of a render call and prepares
 	 * the WebGPU state for upcoming render calls
 	 *
@@ -892,8 +920,8 @@ class WebGPUBackend extends Backend {
 
 		if ( occlusionQueryCount > 0 ) {
 
-			if ( renderContextData.currentOcclusionQuerySet ) renderContextData.currentOcclusionQuerySet.destroy();
-			if ( renderContextData.currentOcclusionQueryBuffer ) renderContextData.currentOcclusionQueryBuffer.destroy();
+			this.destroyResource( renderContextData.currentOcclusionQuerySet );
+			this.destroyResource( renderContextData.currentOcclusionQueryBuffer );
 
 			// Get a reference to the array of objects with queries. The renderContextData property
 			// can be changed by another render pass before the buffer.mapAsyc() completes.
@@ -917,15 +945,6 @@ class WebGPUBackend extends Backend {
 
 			renderContextData.lastOcclusionObject = null;
 
-		} else if ( renderContextData.lastOcclusionObject !== undefined ) {
-
-			// invalidate if there is a stale query
-
-			renderContextData.lastOcclusionObject = undefined;
-
-			renderContextData.occlusionQuerySet.destroy();
-			renderContextData.occlusionQuerySet = undefined;
-
 		}
 
 		let descriptor;
@@ -945,13 +964,6 @@ class WebGPUBackend extends Backend {
 		descriptor.occlusionQuerySet = occlusionQuerySet;
 
 		const depthStencilAttachment = descriptor.depthStencilAttachment;
-		const renderTarget = renderContext.renderTarget;
-		const discardColor = renderContext.sampleCount > 1 && renderTarget?.storeMultisampledColorBuffer === false;
-		const discardDepth = renderContext.sampleCount > 1 && renderTarget?.storeMultisampledDepthBuffer === false;
-		const discardStencil = renderContext.sampleCount > 1 && renderTarget?.storeMultisampledStencilBuffer === false;
-
-		// A fullscreen pass overwrites the external texture, so its previous contents do not need to be loaded.
-		const clearExternalColor = renderContext.fullscreenPass === true && this._hasExternalTexture( renderContext );
 
 		if ( renderContext.textures !== null ) {
 
@@ -961,15 +973,9 @@ class WebGPUBackend extends Backend {
 
 				const colorAttachment = colorAttachments[ i ];
 
-				if ( renderContext.clearColor || discardColor || clearExternalColor ) {
+				if ( renderContext.clearColor ) {
 
-					const clearColor = renderContext.mrt ? renderContext.mrt.getClearColor( renderContext.textures[ i ].name ) : null;
-
-					if ( clearColor !== null ) {
-
-						colorAttachment.clearValue = clearColor;
-
-					} else if ( i === 0 ) {
+					if ( i === 0 ) {
 
 						colorAttachment.clearValue = renderContext.clearColorValue;
 
@@ -992,15 +998,7 @@ class WebGPUBackend extends Backend {
 
 				}
 
-				if ( discardColor ) {
-
-					colorAttachment.storeOp = GPUStoreOp.Discard;
-
-				} else {
-
-					colorAttachment.storeOp = GPUStoreOp.Store;
-
-				}
+				colorAttachment.storeOp = GPUStoreOp.Store;
 
 			}
 
@@ -1027,7 +1025,7 @@ class WebGPUBackend extends Backend {
 
 		if ( renderContext.depth ) {
 
-			if ( renderContext.clearDepth || discardDepth ) {
+			if ( renderContext.clearDepth ) {
 
 				depthStencilAttachment.depthClearValue = renderContext.clearDepthValue;
 				depthStencilAttachment.depthLoadOp = GPULoadOp.Clear;
@@ -1038,21 +1036,13 @@ class WebGPUBackend extends Backend {
 
 			}
 
-			if ( discardDepth ) {
-
-				depthStencilAttachment.depthStoreOp = GPUStoreOp.Discard;
-
-			} else {
-
-				depthStencilAttachment.depthStoreOp = GPUStoreOp.Store;
-
-			}
+			depthStencilAttachment.depthStoreOp = GPUStoreOp.Store;
 
 		}
 
 		if ( renderContext.stencil ) {
 
-		  if ( renderContext.clearStencil || discardStencil ) {
+		  if ( renderContext.clearStencil ) {
 
 				depthStencilAttachment.stencilClearValue = renderContext.clearStencilValue;
 				depthStencilAttachment.stencilLoadOp = GPULoadOp.Clear;
@@ -1063,23 +1053,13 @@ class WebGPUBackend extends Backend {
 
 			}
 
-			if ( discardStencil ) {
-
-				depthStencilAttachment.stencilStoreOp = GPUStoreOp.Discard;
-
-			} else {
-
-				depthStencilAttachment.stencilStoreOp = GPUStoreOp.Store;
-
-			}
+			depthStencilAttachment.stencilStoreOp = GPUStoreOp.Store;
 
 		}
 
 		//
 
-		_commandEncoderDescriptor.label = 'renderContext_' + renderContext.id;
-		const encoder = device.createCommandEncoder( _commandEncoderDescriptor );
-		_commandEncoderDescriptor.reset();
+		const encoder = this._acquireCommandEncoder( 'renderContext_' + renderContext.id );
 
 		// Layered render targets: prepare bundle encoders for each camera in the array camera.
 
@@ -1093,21 +1073,39 @@ class WebGPUBackend extends Backend {
 
 			} else {
 
-				this._updateArrayCameraLayerDescriptors( renderContext, renderContextData, descriptor, cameras );
+				this._updateArrayCameraLayerDescriptors( renderContext, renderContextData, cameras );
 
 			}
 
-			this._createArrayCameraBundleEncoders( renderContext, renderContextData );
-			renderContextData.arrayCameraRenderStages = [];
+			// Create bundle encoders for each layer
+			renderContextData.bundleEncoders = [];
+			renderContextData.bundleSets = [];
+
+			// Create separate bundle encoders for each camera in the array
+			for ( let i = 0; i < cameras.length; i ++ ) {
+
+				const bundleEncoder = this.pipelineUtils.createBundleEncoder(
+					renderContext,
+					'renderBundleArrayCamera_' + i
+				);
+
+				// Initialize state tracking for this bundle
+				const bundleSets = {
+					attributes: {},
+					bindingGroups: [],
+					pipeline: null,
+					index: null
+				};
+
+				renderContextData.bundleEncoders.push( bundleEncoder );
+				renderContextData.bundleSets.push( bundleSets );
+
+			}
 
 			// We'll complete the bundles in finishRender
 			renderContextData.currentPass = null;
 
 		} else {
-
-			renderContextData.bundleEncoders = undefined;
-			renderContextData.bundleSets = undefined;
-			renderContextData.arrayCameraRenderStages = undefined;
 
 			const currentPass = encoder.beginRenderPass( descriptor );
 			renderContextData.currentPass = currentPass;
@@ -1130,86 +1128,8 @@ class WebGPUBackend extends Backend {
 
 		renderContextData.descriptor = descriptor;
 		renderContextData.encoder = encoder;
-		renderContextData.renderBundles = [];
-
-		this._resetRenderContextData( renderContextData );
-
-	}
-
-	/**
-	 * Resets the state cache of the given render context data.
-	 *
-	 * A new render pass encoder starts with a blend constant and a stencil reference
-	 * of zero so the cached values must be reset as well.
-	 *
-	 * @private
-	 * @param {Object} renderContextData - The render context data.
-	 */
-	_resetRenderContextData( renderContextData ) {
-
 		renderContextData.currentSets = { attributes: {}, bindingGroups: [], pipeline: null, index: null };
-
-		if ( renderContextData.currentBlendColor === undefined ) renderContextData.currentBlendColor = new Color();
-
-		renderContextData.currentBlendColor.setRGB( 0, 0, 0 );
-		renderContextData.currentBlendAlpha = 0;
-		renderContextData.currentStencilRef = 0;
-
-	}
-
-	/**
-	 * Creates a render bundle encoder and state cache for each camera layer.
-	 *
-	 * @param {RenderContext} renderContext - The render context.
-	 * @param {Object} renderContextData - The render context data.
-	 * @private
-	 */
-	_createArrayCameraBundleEncoders( renderContext, renderContextData ) {
-
-		const cameras = renderContext.camera.cameras;
-
-		renderContextData.bundleEncoders = [];
-		renderContextData.bundleSets = [];
-
-		for ( let i = 0; i < cameras.length; i ++ ) {
-
-			const bundleEncoder = this.pipelineUtils.createBundleEncoder(
-				renderContext,
-				'renderBundleArrayCamera_' + i
-			);
-
-			const bundleSets = {
-				attributes: {},
-				bindingGroups: [],
-				pipeline: null,
-				index: null
-			};
-
-			renderContextData.bundleEncoders.push( bundleEncoder );
-			renderContextData.bundleSets.push( bundleSets );
-
-		}
-
-	}
-
-	/**
-	 * Finishes the render bundle encoders for all camera layers.
-	 *
-	 * @param {Object} renderContextData - The render context data.
-	 * @return {Array<GPURenderBundle>} The completed render bundles.
-	 * @private
-	 */
-	_finishArrayCameraBundleEncoders( renderContextData ) {
-
-		const bundles = [];
-
-		for ( const bundleEncoder of renderContextData.bundleEncoders ) {
-
-			bundles.push( bundleEncoder.finish() );
-
-		}
-
-		return bundles;
+		renderContextData.renderBundles = [];
 
 	}
 
@@ -1238,12 +1158,11 @@ class WebGPUBackend extends Backend {
 		for ( let i = 0; i < cameras.length; i ++ ) {
 
 			const sourceAttachment = descriptor.colorAttachments[ 0 ];
-			const layerAttachment = descriptor.colorAttachments[ i ];
 
 			const layerColorAttachment = new GPURenderPassColorAttachment();
-			layerColorAttachment.view = layerAttachment.view;
-			layerColorAttachment.depthSlice = layerAttachment.depthSlice;
-			layerColorAttachment.resolveTarget = layerAttachment.resolveTarget;
+			layerColorAttachment.view = descriptor.colorAttachments[ i ].view;
+			layerColorAttachment.depthSlice = sourceAttachment.depthSlice;
+			layerColorAttachment.resolveTarget = sourceAttachment.resolveTarget;
 			layerColorAttachment.loadOp = sourceAttachment.loadOp;
 			layerColorAttachment.storeOp = sourceAttachment.storeOp;
 			layerColorAttachment.clearValue = sourceAttachment.clearValue;
@@ -1260,21 +1179,11 @@ class WebGPUBackend extends Backend {
 
 				if ( ! depthTextureData.viewCache[ layerIndex ] ) {
 
-					const msaaTexture = depthTextureData.msaaTextures?.[ layerIndex ];
+					_viewDescriptor.dimension = GPUTextureViewDimension.TwoD;
+					_viewDescriptor.baseArrayLayer = i;
+					_viewDescriptor.arrayLayerCount = 1;
 
-					if ( msaaTexture !== undefined ) {
-
-						depthTextureData.viewCache[ layerIndex ] = msaaTexture.createView();
-
-					} else {
-
-						_viewDescriptor.dimension = GPUTextureViewDimension.TwoD;
-						_viewDescriptor.baseArrayLayer = i;
-						_viewDescriptor.arrayLayerCount = 1;
-
-						depthTextureData.viewCache[ layerIndex ] = depthTextureData.texture.createView( _viewDescriptor );
-
-					}
+					depthTextureData.viewCache[ layerIndex ] = depthTextureData.texture.createView( _viewDescriptor );
 
 					_viewDescriptor.reset();
 
@@ -1323,29 +1232,14 @@ class WebGPUBackend extends Backend {
 	 *
 	 * @param {RenderContext} renderContext - The render context.
 	 * @param {Object} renderContextData - The render context data.
-	 * @param {Object} descriptor - The render pass descriptor.
 	 * @param {ArrayCamera} cameras - The array camera.
 	 *
 	 */
-	_updateArrayCameraLayerDescriptors( renderContext, renderContextData, descriptor, cameras ) {
-
-		const renderTarget = renderContext.renderTarget;
-		const discardDepth = renderContext.sampleCount > 1 && renderTarget?.storeMultisampledDepthBuffer === false;
-		const discardStencil = renderContext.sampleCount > 1 && renderTarget?.storeMultisampledStencilBuffer === false;
+	_updateArrayCameraLayerDescriptors( renderContext, renderContextData, cameras ) {
 
 		for ( let i = 0; i < cameras.length; i ++ ) {
 
 			const layerDescriptor = renderContextData.layerDescriptors[ i ];
-			const sourceColorAttachment = descriptor.colorAttachments[ 0 ];
-			const layerColorAttachment = descriptor.colorAttachments[ i ];
-			const colorAttachment = layerDescriptor.colorAttachments[ 0 ];
-
-			colorAttachment.view = layerColorAttachment.view;
-			colorAttachment.resolveTarget = layerColorAttachment.resolveTarget;
-			colorAttachment.depthSlice = layerColorAttachment.depthSlice;
-			colorAttachment.loadOp = sourceColorAttachment.loadOp;
-			colorAttachment.storeOp = sourceColorAttachment.storeOp;
-			colorAttachment.clearValue = sourceColorAttachment.clearValue;
 
 			if ( layerDescriptor.depthStencilAttachment ) {
 
@@ -1353,7 +1247,7 @@ class WebGPUBackend extends Backend {
 
 				if ( renderContext.depth ) {
 
-					if ( renderContext.clearDepth || discardDepth ) {
+					if ( renderContext.clearDepth ) {
 
 						depthAttachment.depthClearValue = renderContext.clearDepthValue;
 						depthAttachment.depthLoadOp = GPULoadOp.Clear;
@@ -1368,7 +1262,7 @@ class WebGPUBackend extends Backend {
 
 				if ( renderContext.stencil ) {
 
-					if ( renderContext.clearStencil || discardStencil ) {
+					if ( renderContext.clearStencil ) {
 
 						depthAttachment.stencilClearValue = renderContext.clearStencilValue;
 						depthAttachment.stencilLoadOp = GPULoadOp.Clear;
@@ -1404,9 +1298,7 @@ class WebGPUBackend extends Backend {
 
 		}
 
-		const lastOcclusionObject = renderContextData.lastOcclusionObject;
-
-		if ( lastOcclusionObject && lastOcclusionObject.occlusionTest === true ) {
+		if ( occlusionQueryCount > renderContextData.occlusionQueryIndex ) {
 
 			renderContextData.currentPass.endOcclusionQuery();
 
@@ -1418,49 +1310,20 @@ class WebGPUBackend extends Backend {
 
 		if ( this._isRenderCameraDepthArray( renderContext ) === true ) {
 
-			const bundles = this._finishArrayCameraBundleEncoders( renderContextData );
-			const renderStages = renderContextData.arrayCameraRenderStages;
-			renderStages.push( { bundles } );
+		  const bundles = [];
 
-			// A viewport texture is 2D, so each layer must be captured immediately before that layer samples it.
-			for ( let i = 0; i < renderContextData.layerDescriptors.length; i ++ ) {
+		  for ( let i = 0; i < renderContextData.bundleEncoders.length; i ++ ) {
 
-				const layerDescriptor = renderContextData.layerDescriptors[ i ];
-				const colorLoadOps = layerDescriptor.colorAttachments.map( attachment => attachment.loadOp );
-				const colorStoreOps = layerDescriptor.colorAttachments.map( attachment => attachment.storeOp );
-				const depthLoadOp = layerDescriptor.depthStencilAttachment?.depthLoadOp;
-				const depthStoreOp = layerDescriptor.depthStencilAttachment?.depthStoreOp;
-				const stencilLoadOp = layerDescriptor.depthStencilAttachment?.stencilLoadOp;
-				const stencilStoreOp = layerDescriptor.depthStencilAttachment?.stencilStoreOp;
+				const bundleEncoder = renderContextData.bundleEncoders[ i ];
+				bundles.push( bundleEncoder.finish() );
 
-				for ( let stageIndex = 0; stageIndex < renderStages.length; stageIndex ++ ) {
+			}
 
-					const renderStage = renderStages[ stageIndex ];
-					const bundle = renderStage.bundles[ i ];
-					const isLastStage = stageIndex === renderStages.length - 1;
+		  for ( let i = 0; i < renderContextData.layerDescriptors.length; i ++ ) {
 
-					for ( let j = 0; j < layerDescriptor.colorAttachments.length; j ++ ) {
+				if ( i < bundles.length ) {
 
-						const attachment = layerDescriptor.colorAttachments[ j ];
-						attachment.loadOp = stageIndex === 0 ? colorLoadOps[ j ] : GPULoadOp.Load;
-						attachment.storeOp = isLastStage ? colorStoreOps[ j ] : GPUStoreOp.Store;
-
-					}
-
-					if ( renderContext.depth ) {
-
-						layerDescriptor.depthStencilAttachment.depthLoadOp = stageIndex === 0 ? depthLoadOp : GPULoadOp.Load;
-						layerDescriptor.depthStencilAttachment.depthStoreOp = isLastStage ? depthStoreOp : GPUStoreOp.Store;
-
-					}
-
-					if ( renderContext.stencil ) {
-
-						layerDescriptor.depthStencilAttachment.stencilLoadOp = stageIndex === 0 ? stencilLoadOp : GPULoadOp.Load;
-						layerDescriptor.depthStencilAttachment.stencilStoreOp = isLastStage ? stencilStoreOp : GPUStoreOp.Store;
-
-					}
-
+					const layerDescriptor = renderContextData.layerDescriptors[ i ];
 					const renderPass = encoder.beginRenderPass( layerDescriptor );
 
 					if ( renderContext.viewport ) {
@@ -1477,38 +1340,9 @@ class WebGPUBackend extends Backend {
 
 					}
 
-					renderPass.executeBundles( [ bundle ] );
+					renderPass.executeBundles( [ bundles[ i ] ] );
 
 					renderPass.end();
-
-					if ( renderStage.framebufferCopy !== undefined ) {
-
-						const { texture, sourceGPU, destinationGPU, rectangle, generateMipmaps } = renderStage.framebufferCopy;
-
-						this._copyFramebufferToTexture( encoder, texture, sourceGPU, destinationGPU, rectangle, i, generateMipmaps );
-
-					}
-
-				}
-
-				for ( let j = 0; j < layerDescriptor.colorAttachments.length; j ++ ) {
-
-					layerDescriptor.colorAttachments[ j ].loadOp = colorLoadOps[ j ];
-					layerDescriptor.colorAttachments[ j ].storeOp = colorStoreOps[ j ];
-
-				}
-
-				if ( renderContext.depth ) {
-
-					layerDescriptor.depthStencilAttachment.depthLoadOp = depthLoadOp;
-					layerDescriptor.depthStencilAttachment.depthStoreOp = depthStoreOp;
-
-				}
-
-				if ( renderContext.stencil ) {
-
-					layerDescriptor.depthStencilAttachment.stencilLoadOp = stencilLoadOp;
-					layerDescriptor.depthStencilAttachment.stencilStoreOp = stencilStoreOp;
 
 				}
 
@@ -1556,13 +1390,20 @@ class WebGPUBackend extends Backend {
 
 			renderContextData.occlusionQueryBuffer = readBuffer;
 
-			//
+		}
+
+		this._finishCommandEncoder( renderContextData.encoder );
+
+		if ( occlusionQueryCount > 0 ) {
+
+			// occlusion results are read back on the CPU, so the resolve recorded above must
+			// be submitted before mapAsync(); force the frame's work out now
+
+			this.submit();
 
 			this.resolveOccludedAsync( renderContext );
 
 		}
-
-		submit( this.device, renderContextData.encoder.finish() );
 
 
 		//
@@ -1633,17 +1474,15 @@ class WebGPUBackend extends Backend {
 
 			for ( let i = 0; i < currentOcclusionQueryObjects.length; i ++ ) {
 
-				const object = currentOcclusionQueryObjects[ i ];
+				if ( results[ i ] === BigInt( 0 ) ) {
 
-				if ( object !== undefined && results[ i ] === BigInt( 0 ) ) {
-
-					occluded.add( object );
+					occluded.add( currentOcclusionQueryObjects[ i ] );
 
 				}
 
 			}
 
-			currentOcclusionQueryBuffer.destroy();
+			this.destroyResource( currentOcclusionQueryBuffer );
 
 			renderContextData.occluded = occluded;
 
@@ -1713,7 +1552,6 @@ class WebGPUBackend extends Backend {
 	 */
 	clear( color, depth, stencil, renderTargetContext = null ) {
 
-		const device = this.device;
 		const renderer = this.renderer;
 
 		let colorAttachments = [];
@@ -1829,9 +1667,7 @@ class WebGPUBackend extends Backend {
 
 		//
 
-		_commandEncoderDescriptor.label = 'clear';
-		const encoder = device.createCommandEncoder( _commandEncoderDescriptor );
-		_commandEncoderDescriptor.reset();
+		const encoder = this._acquireCommandEncoder( 'clear' );
 
 		const currentPass = encoder.beginRenderPass( {
 			colorAttachments,
@@ -1840,7 +1676,7 @@ class WebGPUBackend extends Backend {
 
 		currentPass.end();
 
-		submit( device, encoder.finish() );
+		this._finishCommandEncoder( encoder );
 
 	}
 
@@ -1861,15 +1697,15 @@ class WebGPUBackend extends Backend {
 		const label = 'computeGroup_' + computeGroup.id;
 
 		_computePassDescriptor.label = label;
-		_commandEncoderDescriptor.label = label;
 
 		this.initTimestampQuery( TimestampQuery.COMPUTE, this.getTimestampUID( computeGroup ), _computePassDescriptor );
 
-		groupGPU.cmdEncoderGPU = this.device.createCommandEncoder( _commandEncoderDescriptor );
-		groupGPU.passEncoderGPU = groupGPU.cmdEncoderGPU.beginComputePass( _computePassDescriptor );
+		const commandEncoder = this._acquireCommandEncoder( label );
+
+		groupGPU.cmdEncoderGPU = commandEncoder;
+		groupGPU.passEncoderGPU = commandEncoder.beginComputePass( _computePassDescriptor );
 		groupGPU.currentPipeline = null;
 
-		_commandEncoderDescriptor.reset();
 		_computePassDescriptor.reset();
 
 	}
@@ -1997,7 +1833,30 @@ class WebGPUBackend extends Backend {
 
 		groupData.passEncoderGPU.end();
 
-		submit( this.device, groupData.cmdEncoderGPU.finish() );
+		this._finishCommandEncoder( groupData.cmdEncoderGPU );
+
+	}
+
+	submit() {
+
+		console.log( 'submitting' );
+
+		this._submitScheduled = false;
+
+		if ( this._finishedCommandBuffers.length > 0 ) {
+
+			this.device.queue.submit( this._finishedCommandBuffers );
+			this._finishedCommandBuffers.length = 0;
+
+		}
+
+		if ( this._resourcesToDestroy.length > 0 ) {
+
+			for ( const resource of this._resourcesToDestroy ) resource.destroy();
+
+			this._resourcesToDestroy.length = 0;
+
+		}
 
 	}
 
@@ -2014,9 +1873,8 @@ class WebGPUBackend extends Backend {
 	 * @param {{vertexCount: number, firstVertex: number, instanceCount: number, firstInstance: number}} drawParams - The draw parameters.
 	 * @param {GPURenderPassEncoder|GPURenderBundleEncoder} passEncoderGPU - The GPU pass encoder used for recording draw commands.
 	 * @param {Object} currentSets - Tracking object for currently set pipeline, attributes, bind groups, and index state.
-	 * @param {number} [cameraIndexSlot=-1] - Index of the binding slot holding the camera index bind group.
 	 */
-	_draw( renderObject, info, renderContextData, pipelineGPU, bindings, vertexBuffers, drawParams, passEncoderGPU, currentSets, cameraIndexSlot = - 1 ) {
+	_draw( renderObject, info, renderContextData, pipelineGPU, bindings, vertexBuffers, drawParams, passEncoderGPU, currentSets ) {
 
 		const { object, material, context } = renderObject;
 
@@ -2038,19 +1896,14 @@ class WebGPUBackend extends Backend {
 
 		for ( let i = 0, l = bindings.length; i < l; i ++ ) {
 
-			// the camera index slot is bound per sub-camera in draw()
-
-			if ( i === cameraIndexSlot ) continue;
-
-			// compare native bind groups
-
 			const bindGroup = bindings[ i ];
-			const bindGroupGPU = this.get( bindGroup ).group;
 
-			if ( currentBindingGroups[ i ] !== bindGroupGPU ) {
+			if ( currentBindingGroups[ i ] !== bindGroup.id ) {
 
-				passEncoderGPU.setBindGroup( i, bindGroupGPU );
-				currentBindingGroups[ i ] = bindGroupGPU;
+				const bindingsData = this.get( bindGroup );
+
+				passEncoderGPU.setBindGroup( i, bindingsData.group );
+				currentBindingGroups[ i ] = bindGroup.id;
 
 			}
 
@@ -2098,35 +1951,19 @@ class WebGPUBackend extends Backend {
 
 		}
 
-		// blend constant
-
-		if ( material.blending === CustomBlending && passEncoderGPU.setBlendConstant !== undefined ) {
-
-			const blendColor = material.blendColor;
-			const blendAlpha = material.blendAlpha;
-
-			if ( blendColor.equals( renderContextData.currentBlendColor ) === false || blendAlpha !== renderContextData.currentBlendAlpha ) {
-
-				_blendConstant.r = blendColor.r;
-				_blendConstant.g = blendColor.g;
-				_blendConstant.b = blendColor.b;
-				_blendConstant.a = blendAlpha;
-
-				passEncoderGPU.setBlendConstant( _blendConstant );
-
-				renderContextData.currentBlendColor.copy( blendColor );
-				renderContextData.currentBlendAlpha = blendAlpha;
-
-			}
-
-		}
-
 		if ( object.isBatchedMesh === true ) {
 
 			const starts = object._multiDrawStarts;
 			const counts = object._multiDrawCounts;
 			const drawCount = object._multiDrawCount;
-			const bytesPerElement = object._multiDrawBytesPerElement;
+
+			let bytesPerElement = ( hasIndex === true ) ? index.array.BYTES_PER_ELEMENT : 1;
+
+			if ( material.wireframe ) {
+
+				bytesPerElement = object.geometry.attributes.position.count > 65535 ? 4 : 2;
+
+			}
 
 			for ( let i = 0; i < drawCount; i ++ ) {
 
@@ -2257,9 +2094,7 @@ class WebGPUBackend extends Backend {
 
 			}
 
-			const renderTarget = context.renderTarget;
-			const pixelRatio = ( renderTarget === null || renderTarget.isPostProcessingRenderTarget === true ) ? this.renderer.getPixelRatio() : 1;
-			const indexPos = cameraIndex ? bindings.indexOf( cameraIndex ) : - 1;
+			const pixelRatio = this.renderer.getPixelRatio();
 
 			for ( let i = 0, len = cameras.length; i < len; i ++ ) {
 
@@ -2297,20 +2132,15 @@ class WebGPUBackend extends Backend {
 					}
 
 					// Set camera index binding for this layer
-					if ( indexPos !== - 1 && cameraData.indexesGPU ) {
+					if ( cameraIndex && cameraData.indexesGPU ) {
 
-						const cameraIndexGPU = cameraData.indexesGPU[ i ];
-
-						if ( sets.bindingGroups[ indexPos ] !== cameraIndexGPU ) {
-
-							pass.setBindGroup( indexPos, cameraIndexGPU );
-							sets.bindingGroups[ indexPos ] = cameraIndexGPU;
-
-						}
+						const indexPos = bindings.indexOf( cameraIndex );
+						pass.setBindGroup( indexPos, cameraData.indexesGPU[ i ] );
+						sets.bindingGroups[ indexPos ] = cameraIndex.id;
 
 					}
 
-					this._draw( renderObject, info, renderContextData, pipelineGPU, bindings, vertexBuffers, drawParams, pass, sets, indexPos );
+					this._draw( renderObject, info, renderContextData, pipelineGPU, bindings, vertexBuffers, drawParams, pass, sets );
 
 				}
 
@@ -2322,16 +2152,7 @@ class WebGPUBackend extends Backend {
 			if ( renderContextData.currentPass ) {
 
 				// Handle occlusion queries
-
-				if ( renderContextData.currentPass instanceof GPURenderBundleEncoder ) {
-
-					if ( object.occlusionTest === true ) {
-
-						warnOnce( 'WebGPUBackend: Occlusion queries can not be recorded into render bundles.' );
-
-					}
-
-				} else if ( renderContextData.occlusionQuerySet !== undefined ) {
+				if ( renderContextData.occlusionQuerySet !== undefined ) {
 
 					const lastObject = renderContextData.lastOcclusionObject;
 					if ( lastObject !== object ) {
@@ -2397,7 +2218,6 @@ class WebGPUBackend extends Backend {
 			data.stencilWrite !== material.stencilWrite || data.stencilFunc !== material.stencilFunc ||
 			data.stencilFail !== material.stencilFail || data.stencilZFail !== material.stencilZFail || data.stencilZPass !== material.stencilZPass ||
 			data.stencilFuncMask !== material.stencilFuncMask || data.stencilWriteMask !== material.stencilWriteMask ||
-			data.polygonOffset !== material.polygonOffset || data.polygonOffsetFactor !== material.polygonOffsetFactor || data.polygonOffsetUnits !== material.polygonOffsetUnits ||
 			data.side !== material.side || data.alphaToCoverage !== material.alphaToCoverage ||
 			data.sampleCount !== sampleCount || data.colorSpace !== colorSpace ||
 			data.colorFormat !== colorFormat || data.depthStencilFormat !== depthStencilFormat ||
@@ -2415,7 +2235,6 @@ class WebGPUBackend extends Backend {
 			data.stencilWrite = material.stencilWrite; data.stencilFunc = material.stencilFunc;
 			data.stencilFail = material.stencilFail; data.stencilZFail = material.stencilZFail; data.stencilZPass = material.stencilZPass;
 			data.stencilFuncMask = material.stencilFuncMask; data.stencilWriteMask = material.stencilWriteMask;
-			data.polygonOffset = material.polygonOffset; data.polygonOffsetFactor = material.polygonOffsetFactor; data.polygonOffsetUnits = material.polygonOffsetUnits;
 			data.side = material.side; data.alphaToCoverage = material.alphaToCoverage;
 			data.sampleCount = sampleCount;
 			data.colorSpace = colorSpace;
@@ -2460,8 +2279,7 @@ class WebGPUBackend extends Backend {
 			material.stencilWrite, material.stencilFunc,
 			material.stencilFail, material.stencilZFail, material.stencilZPass,
 			material.stencilFuncMask, material.stencilWriteMask,
-			material.polygonOffset, material.polygonOffsetFactor, material.polygonOffsetUnits,
-			material.side, material.alphaToCoverage,
+			material.side,
 			frontFaceCW,
 			utils.getSampleCountRenderContext( renderContext ),
 			utils.getCurrentColorSpace( renderContext ), utils.getCurrentColorFormat( renderContext ), utils.getCurrentDepthStencilFormat( renderContext ),
@@ -2553,6 +2371,8 @@ class WebGPUBackend extends Backend {
 	 */
 	destroyTexture( texture, isDefaultTexture = false ) {
 
+		this.submit();
+
 		this.textureUtils.destroyTexture( texture, isDefaultTexture );
 
 	}
@@ -2566,12 +2386,33 @@ class WebGPUBackend extends Backend {
 	 * @param {number} y - The y coordinate of the copy origin.
 	 * @param {number} width - The width of the copy.
 	 * @param {number} height - The height of the copy.
-	 * @param {number} faceIndex - The cube face, depth slice or array layer index.
+	 * @param {number} faceIndex - The face index.
 	 * @return {Promise<TypedArray>} A Promise that resolves with a typed array when the copy operation has finished.
 	 */
 	async copyTextureToBuffer( texture, x, y, width, height, faceIndex ) {
 
+		// submit work so the texture read does not pull from stale data
+
+		this.submit();
+
 		return this.textureUtils.copyTextureToBuffer( texture, x, y, width, height, faceIndex );
+
+	}
+
+	/**
+	 * Resolves the time stamp for the given render context and type.
+	 *
+	 * @async
+	 * @param {string} [type='render'] - The type of the time stamp.
+	 * @return {Promise<number>} A Promise that resolves with the time stamp.
+	 */
+	async resolveTimestampsAsync( type = 'render' ) {
+
+		// resolveTimestamp must execute after unfinished commandEncoder
+
+		this.submit();
+
+		return super.resolveTimestampsAsync( type );
 
 	}
 
@@ -2674,11 +2515,10 @@ class WebGPUBackend extends Backend {
 	 *
 	 * @param {ComputePipeline} computePipeline - The compute pipeline.
 	 * @param {Array<BindGroup>} bindings - The bindings.
-	 * @param {?Array<Promise>} [promises=null] - Optional compilation promises.
 	 */
-	createComputePipeline( computePipeline, bindings, promises = null ) {
+	createComputePipeline( computePipeline, bindings ) {
 
-		this.pipelineUtils.createComputePipeline( computePipeline, bindings, promises );
+		this.pipelineUtils.createComputePipeline( computePipeline, bindings );
 
 	}
 
@@ -2718,8 +2558,6 @@ class WebGPUBackend extends Backend {
 
 		renderContextData.currentSets = renderContextData._currentSets;
 		renderContextData.currentPass = renderContextData._currentPass;
-		renderContextData._currentPass = null;
-		renderContextData._currentSets = null;
 
 	}
 
@@ -2799,7 +2637,7 @@ class WebGPUBackend extends Backend {
 
 		const uniformBufferData = this.get( uniformBuffer );
 
-		uniformBufferData.buffer.destroy();
+		this.destroyResource( uniformBufferData.buffer );
 
 		this.delete( uniformBuffer );
 
@@ -2810,12 +2648,12 @@ class WebGPUBackend extends Backend {
 	 *
 	 * @param {BindGroup} bindGroup - The bind group.
 	 * @param {Array<BindGroup>} bindings - Array of bind groups.
-	 * @param {string} cacheKey - The cache key.
+	 * @param {number} cacheIndex - The cache index.
 	 * @param {number} version - The version.
 	 */
-	createBindings( bindGroup, bindings, cacheKey, version ) {
+	createBindings( bindGroup, bindings, cacheIndex, version ) {
 
-		this.bindingUtils.createBindings( bindGroup, bindings, cacheKey, version );
+		this.bindingUtils.createBindings( bindGroup, bindings, cacheIndex, version );
 
 	}
 
@@ -2824,12 +2662,12 @@ class WebGPUBackend extends Backend {
 	 *
 	 * @param {BindGroup} bindGroup - The bind group.
 	 * @param {Array<BindGroup>} bindings - Array of bind groups.
-	 * @param {string} cacheKey - The cache key.
+	 * @param {number} cacheIndex - The cache index.
 	 * @param {number} version - The version.
 	 */
-	updateBindings( bindGroup, bindings, cacheKey, version ) {
+	updateBindings( bindGroup, bindings, cacheIndex, version ) {
 
-		this.bindingUtils.createBindings( bindGroup, bindings, cacheKey, version );
+		this.bindingUtils.createBindings( bindGroup, bindings, cacheIndex, version );
 
 	}
 
@@ -2927,6 +2765,10 @@ class WebGPUBackend extends Backend {
 	 */
 	destroyAttribute( attribute ) {
 
+		// flush command encoders to keep state valid
+
+		this.submit();
+
 		this.attributeUtils.destroyAttribute( attribute );
 
 	}
@@ -3016,9 +2858,7 @@ class WebGPUBackend extends Backend {
 
 		}
 
-		_commandEncoderDescriptor.label = 'copyTextureToTexture_' + srcTexture.id + '_' + dstTexture.id;
-		const encoder = this.device.createCommandEncoder( _commandEncoderDescriptor );
-		_commandEncoderDescriptor.reset();
+		const encoder = this._acquireCommandEncoder( 'copyTextureToTexture_' + srcTexture.id + '_' + dstTexture.id );
 
 		const sourceGPU = this.get( srcTexture ).texture;
 		const destinationGPU = this.get( dstTexture ).texture;
@@ -3049,13 +2889,16 @@ class WebGPUBackend extends Backend {
 		_texelCopyTextureInfoDst.reset();
 		_extent3D.reset();
 
-		submit( this.device, encoder.finish() );
+		// mipmaps must be generated with the same command encoder so the copied texture
+		// data is not read before the copy has executed
 
 		if ( dstLevel === 0 && dstTexture.generateMipmaps ) {
 
-			this.textureUtils.generateMipmaps( dstTexture );
+			this.textureUtils.generateMipmaps( dstTexture, encoder );
 
 		}
+
+		this._finishCommandEncoder( encoder );
 
 	}
 
@@ -3108,32 +2951,11 @@ class WebGPUBackend extends Backend {
 
 		}
 
-		if ( this._isRenderCameraDepthArray( renderContext ) === true ) {
-
-			// Layered draws are only executed in finishRender(), so preserve this copy as a render-stage boundary.
-			const bundles = this._finishArrayCameraBundleEncoders( renderContextData );
-
-			renderContextData.arrayCameraRenderStages.push( {
-				bundles,
-				framebufferCopy: {
-					texture,
-					sourceGPU,
-					destinationGPU,
-					rectangle: { x: rectangle.x, y: rectangle.y, z: rectangle.z, w: rectangle.w },
-					// ViewportTextureNode restores this flag before the deferred copy executes.
-					generateMipmaps: texture.generateMipmaps
-				}
-			} );
-
-			this._createArrayCameraBundleEncoders( renderContext, renderContextData );
-
-			return;
-
-		}
-
 		let encoder;
 
 		if ( renderContextData.currentPass ) {
+
+			// inside an open pass: reuse the render context's encoder, which finishRender finishes
 
 			renderContextData.currentPass.end();
 
@@ -3141,72 +2963,13 @@ class WebGPUBackend extends Backend {
 
 		} else {
 
-			_commandEncoderDescriptor.label = 'copyFramebufferToTexture_' + texture.id;
-			encoder = this.device.createCommandEncoder( _commandEncoderDescriptor );
-			_commandEncoderDescriptor.reset();
+			encoder = this._acquireCommandEncoder( 'copyFramebufferToTexture_' + texture.id );
 
 		}
-
-		// mipmaps must be genereated with the same encoder otherwise the copied texture data
-		// might be out-of-sync, see #31768
-
-		this._copyFramebufferToTexture( encoder, texture, sourceGPU, destinationGPU, rectangle );
-
-		if ( renderContextData.currentPass ) {
-
-			const { descriptor } = renderContextData;
-
-			for ( let i = 0; i < descriptor.colorAttachments.length; i ++ ) {
-
-				descriptor.colorAttachments[ i ].loadOp = GPULoadOp.Load;
-
-			}
-
-			if ( renderContext.depth ) descriptor.depthStencilAttachment.depthLoadOp = GPULoadOp.Load;
-			if ( renderContext.stencil ) descriptor.depthStencilAttachment.stencilLoadOp = GPULoadOp.Load;
-
-			renderContextData.currentPass = encoder.beginRenderPass( descriptor );
-
-			this._resetRenderContextData( renderContextData );
-
-			if ( renderContext.viewport ) {
-
-				this.updateViewport( renderContext );
-
-			}
-
-			if ( renderContext.scissor ) {
-
-				this.updateScissor( renderContext );
-
-			}
-
-		} else {
-
-			submit( this.device, encoder.finish() );
-
-		}
-
-	}
-
-	/**
-	 * Encodes a framebuffer copy from a specific texture-array layer.
-	 *
-	 * @param {GPUCommandEncoder} encoder - The command encoder.
-	 * @param {Texture} texture - The destination texture.
-	 * @param {GPUTexture} sourceGPU - The source GPU texture.
-	 * @param {GPUTexture} destinationGPU - The destination GPU texture.
-	 * @param {Object} rectangle - The source rectangle.
-	 * @param {number} [sourceLayer=0] - The source array layer.
-	 * @param {boolean} [generateMipmaps=texture.generateMipmaps] - Whether mipmaps should be generated.
-	 * @private
-	 */
-	_copyFramebufferToTexture( encoder, texture, sourceGPU, destinationGPU, rectangle, sourceLayer = 0, generateMipmaps = texture.generateMipmaps ) {
 
 		_texelCopyTextureInfoSrc.texture = sourceGPU;
 		_texelCopyTextureInfoSrc.origin.x = rectangle.x;
 		_texelCopyTextureInfoSrc.origin.y = rectangle.y;
-		_texelCopyTextureInfoSrc.origin.z = sourceLayer;
 
 		_texelCopyTextureInfoDst.texture = destinationGPU;
 
@@ -3223,9 +2986,46 @@ class WebGPUBackend extends Backend {
 		_texelCopyTextureInfoDst.reset();
 		_extent3D.reset();
 
-		if ( generateMipmaps ) {
+		// mipmaps must be genereated with the same encoder otherwise the copied texture data
+		// might be out-of-sync, see #31768
+
+		if ( texture.generateMipmaps ) {
 
 			this.textureUtils.generateMipmaps( texture, encoder );
+
+		}
+
+		if ( renderContextData.currentPass ) {
+
+			const { descriptor } = renderContextData;
+
+			for ( let i = 0; i < descriptor.colorAttachments.length; i ++ ) {
+
+				descriptor.colorAttachments[ i ].loadOp = GPULoadOp.Load;
+
+			}
+
+			if ( renderContext.depth ) descriptor.depthStencilAttachment.depthLoadOp = GPULoadOp.Load;
+			if ( renderContext.stencil ) descriptor.depthStencilAttachment.stencilLoadOp = GPULoadOp.Load;
+
+			renderContextData.currentPass = encoder.beginRenderPass( descriptor );
+			renderContextData.currentSets = { attributes: {}, bindingGroups: [], pipeline: null, index: null };
+
+			if ( renderContext.viewport ) {
+
+				this.updateViewport( renderContext );
+
+			}
+
+			if ( renderContext.scissor ) {
+
+				this.updateScissor( renderContext );
+
+			}
+
+		} else {
+
+			this._finishCommandEncoder( encoder );
 
 		}
 
@@ -3249,9 +3049,7 @@ class WebGPUBackend extends Backend {
 
 	}
 
-	async dispose() {
-
-		await super.dispose();
+	dispose() {
 
 		this.bindingUtils.dispose();
 		this.textureUtils.dispose();
@@ -3265,6 +3063,16 @@ class WebGPUBackend extends Backend {
 			}
 
 			this.occludedResolveCache.clear();
+
+		}
+
+		if ( this.timestampQueryPool ) {
+
+			for ( const queryPool of Object.values( this.timestampQueryPool ) ) {
+
+				if ( queryPool !== null ) queryPool.dispose();
+
+			}
 
 		}
 

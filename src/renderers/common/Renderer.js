@@ -149,6 +149,17 @@ class Renderer {
 		 */
 		this.autoClearStencil = true;
 
+
+		/**
+		 * When `autoSubmit` is set to `true`, this property defines whether the renderer's
+		 * backend should automatically submit GPU passes to the command encoder on each
+		 * render or compute call.
+		 *
+		 * @type {boolean}
+		 * @default true
+		 */
+		this.autoSubmit = true;
+
 		/**
 		 * Whether the default framebuffer should be transparent or opaque.
 		 *
@@ -281,6 +292,7 @@ class Renderer {
 		 * @type {Function}
 		 */
 		this._onCanvasTargetResize = this._onCanvasTargetResize.bind( this );
+		this._onCanvasTargetBeforeResize = this._onCanvasTargetBeforeResize.bind( this );
 
 		/**
 		 * The canvas target for rendering.
@@ -290,6 +302,7 @@ class Renderer {
 		 */
 		this._canvasTarget = new CanvasTarget( backend.getDomElement() );
 		this._canvasTarget.addEventListener( 'resize', this._onCanvasTargetResize );
+		this._canvasTarget.addEventListener( 'beforeresize', this._onCanvasTargetBeforeResize );
 		this._canvasTarget.isDefaultCanvasTarget = true;
 
 		/**
@@ -2784,6 +2797,7 @@ class Renderer {
 	setCanvasTarget( canvasTarget ) {
 
 		this._canvasTarget.removeEventListener( 'resize', this._onCanvasTargetResize );
+		this._canvasTarget.removeEventListener( 'beforeresize', this._onCanvasTargetBeforeResize );
 
 		this._canvasTarget = canvasTarget;
 		this._canvasTarget.addEventListener( 'resize', this._onCanvasTargetResize );
@@ -2994,6 +3008,20 @@ class Renderer {
 		if ( this._initialized === false ) await this.init();
 
 		this.compute( computeNodes, dispatchSize );
+
+	}
+
+	/**
+	 * Receives all pooled render passes and compute passes and submits them to the device's
+	 * command encoder in a single call.
+	 */
+	submit() {
+
+		if ( ! this.autoSubmit ) {
+
+			this.backend.submit();
+
+		}
 
 	}
 
@@ -3966,6 +3994,20 @@ class Renderer {
 	_onCanvasTargetResize() {
 
 		if ( this._initialized ) this.backend.updateSize();
+
+	}
+
+	/**
+	 * Callback invoked just before the canvas is resized, while the current drawing
+	 * buffer is still valid. Any work already recorded against it must be submitted
+	 * now: the resize destroys that texture, and submitting afterwards would fail
+	 * validation with a destroyed texture.
+	 *
+	 * @private
+	 */
+	_onCanvasTargetBeforeResize() {
+
+		if ( this._initialized ) this.backend.submit();
 
 	}
 

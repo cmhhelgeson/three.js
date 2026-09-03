@@ -161,6 +161,8 @@ class CanvasTarget extends EventDispatcher {
 		// Renderer can't be resized while presenting in XR.
 		if ( this.xr && this.xr.isPresenting ) return;
 
+		this._dispatchBeforeResize();
+
 		this._width = width;
 		this._height = height;
 
@@ -186,6 +188,8 @@ class CanvasTarget extends EventDispatcher {
 
 		// Renderer can't be resized while presenting in XR.
 		if ( this.xr && this.xr.isPresenting ) return;
+
+		this._dispatchBeforeResize();
 
 		this._width = width;
 		this._height = height;
@@ -321,6 +325,20 @@ class CanvasTarget extends EventDispatcher {
 	_dispatchResize() {
 
 		this.dispatchEvent( { type: 'resize' } );
+
+	}
+
+	/**
+	 * Dispatches the event signalling that the canvas is about to be resized, while
+	 * its current drawing buffer is still valid. Resizing the canvas destroys the
+	 * texture returned by `getCurrentTexture()`, so a backend that defers its submit
+	 * has to flush any recorded work that targets it before that happens.
+	 *
+	 * @private
+	 */
+	_dispatchBeforeResize() {
+
+		this.dispatchEvent( { type: 'beforeresize' } );
 
 	}
 
