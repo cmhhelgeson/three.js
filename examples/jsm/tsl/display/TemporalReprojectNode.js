@@ -1,4 +1,4 @@
-import { EPSILON, Fn, If, abs, convertToTexture, dFdx, dFdy, dot, exp, float, floor, fwidth, getViewPosition, ivec2, luminance, max, min, mix, nodeObject, normalize, passTexture, screenCoordinate, select, smoothstep, sqrt, struct, texture, textureLoad, uniform, unpackRGBToNormal, uv, vec2, vec3, vec4, velocity, context, OnBeforeRenderPipeline, OnAfterRenderPipeline } from 'three/tsl';
+import { EPSILON, Fn, If, abs, convertToTexture, dFdx, dFdy, dot, exp, float, floor, fwidth, getViewPosition, ivec2, luminance, max, min, mix, nodeObject, normalize, passTexture, screenCoordinate, select, smoothstep, sqrt, struct, texture, textureLoad, uniform, unpackRGBToNormal, uv, vec2, vec3, vec4, velocity, quadSwapX, quadSwapY, quadSwapDiagonal, context, OnBeforeRenderPipeline, OnAfterRenderPipeline } from 'three/tsl';
 import { DepthTexture, HalfFloatType, Matrix4, NodeMaterial, NodeUpdateType, QuadMesh, RenderTarget, RendererUtils, TempNode, Vector2, Vector3 } from 'three/webgpu';
 import { ENV_RAY_LENGTH, ENV_RAY_LENGTH_THRESHOLD } from '../utils/SpecularHelpers.js';
 
@@ -140,7 +140,7 @@ const neighborhoodStruct = struct( {
  *
  * @tsl
  */
-const collectNeighborhood = Fn( ( [ beautyTexture, beautyTexel, inputColor, flickerSuppression ] ) => {
+const collectNeighborhood = Fn( ( [ beautyTexture, beautyTexel, inputColor, flickerSuppression ], builder ) => {
 
 	const offsets = [
 		[ - 1, - 1 ],
@@ -181,15 +181,76 @@ const collectNeighborhood = Fn( ( [ beautyTexture, beautyTexel, inputColor, flic
 
 	accumulateRayLength( inputColor.a );
 
-	for ( const [ x, y ] of offsets ) {
+	// Folds one tap into both accumulators. Every tap contributes the same way, so the
+	// order they arrive in does not matter: the colour moments are plain sums and the
+	// ray-length statistics are order independent in exact arithmetic.
 
-		const neighbor = textureLoad( beautyTexture, beautyTexel.add( ivec2( x, y ) ) ).max( 0 ).toVar();
+	const accumulateTap = ( tap ) => {
 
-		const c = rgbToYCoCg( dampenForVarianceClip( neighbor.rgb, flickerSuppression ) );
+		const c = rgbToYCoCg( dampenForVarianceClip( tap.rgb, flickerSuppression ) );
 		moment1.addAssign( c );
 		moment2.addAssign( c.pow2() );
 
-		accumulateRayLength( neighbor.a );
+		accumulateRayLength( tap.a );
+
+	};
+
+	if ( builder.renderer.hasFeature( 'subgroups' ) === true ) {
+
+		// A 2x2 fragment quad covers a 2x2 block of texels, so the union of the four
+		// 3x3 neighbourhoods is only 4x4. The centre tap is already in hand as
+		// inputColor, so each invocation only loads the three taps on its own outside
+		// corner and reaches the remaining five through a quad exchange: three loads
+		// instead of eight.
+		//
+		// Parity comes from the fragment coordinate rather than the beauty texel, since
+		// it is the fragment quad the exchange operates on.
+
+		const px = screenCoordinate.x.floor().mod( 2.0 );
+		const py = screenCoordinate.y.floor().mod( 2.0 );
+
+		// offsets pointing away from this invocation's quad
+
+		const stepX = select( px.lessThan( 0.5 ), ivec2( - 1, 0 ), ivec2( 1, 0 ) ).toConst( 'quadStepX' );
+		const stepY = select( py.lessThan( 0.5 ), ivec2( 0, - 1 ), ivec2( 0, 1 ) ).toConst( 'quadStepY' );
+
+		const horizontalTap = textureLoad( beautyTexture, beautyTexel.add( stepX ) ).max( 0 ).toConst( 'horizontalTap' );
+		const verticalTap = textureLoad( beautyTexture, beautyTexel.add( stepY ) ).max( 0 ).toConst( 'verticalTap' );
+		const diagonalTap = textureLoad( beautyTexture, beautyTexel.add( stepX ).add( stepY ) ).max( 0 ).toConst( 'diagonalTap' );
+
+		// The exchange moves per-tap values, never an accumulator: a partner's sums
+		// already cover its own outliers, which sit outside this 3x3 window. Each swap
+		// is bound to a const so all four invocations reach it in uniform control flow.
+		//
+		// The three quad partners contribute their own centre tap, and the two corners
+		// this invocation never loads are exactly the outliers its row and column
+		// partners did load.
+
+		const partnerXTap = quadSwapX( inputColor ).toConst( 'partnerXTap' );
+		const partnerYTap = quadSwapY( inputColor ).toConst( 'partnerYTap' );
+		const partnerDiagonalTap = quadSwapDiagonal( inputColor ).toConst( 'partnerDiagonalTap' );
+
+		const cornerFromRowTap = quadSwapX( verticalTap ).toConst( 'cornerFromRowTap' );
+		const cornerFromColumnTap = quadSwapY( horizontalTap ).toConst( 'cornerFromColumnTap' );
+
+		accumulateTap( horizontalTap );
+		accumulateTap( verticalTap );
+		accumulateTap( diagonalTap );
+
+		accumulateTap( partnerXTap );
+		accumulateTap( partnerYTap );
+		accumulateTap( partnerDiagonalTap );
+
+		accumulateTap( cornerFromRowTap );
+		accumulateTap( cornerFromColumnTap );
+
+	} else {
+
+		for ( const [ x, y ] of offsets ) {
+
+			accumulateTap( textureLoad( beautyTexture, beautyTexel.add( ivec2( x, y ) ) ).max( 0 ).toVar() );
+
+		}
 
 	}
 

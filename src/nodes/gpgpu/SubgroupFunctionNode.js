@@ -106,6 +106,11 @@ class SubgroupFunctionNode extends TempNode {
 
 		}
 
+		// the WGSL directive is required wherever a subgroup function is called, not just
+		// in compute, so request it here rather than relying on the stage setup
+
+		if ( builder.enableSubGroups !== undefined ) builder.enableSubGroups();
+
 		const type = this.getNodeType( builder );
 		const inputType = this.getInputType( builder );
 
