@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgpu - uniform array mat2</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link type="text/css" rel="stylesheet" href="example.css">
+	</head>
+	<body>
+
+		<div id="info">
+			<div class="title-wrapper">
+				<a href="https://threejs.org/" target="_blank" rel="noopener">three.js</a><span>Uniform Array mat2</span>
+			</div>
+
+			<small>
+				Expected: left cube red, right cube yellow. Backend: <span id="backend"></span>.<br/>
+				Toggle Inspector &gt; Settings &gt; Force WebGL to switch backends. See the console for the buffer layout.
+			</small>
+		</div>
+
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../build/three.webgpu.js",
+					"three/webgpu": "../build/three.webgpu.js",
+					"three/tsl": "../build/three.tsl.js",
+					"three/addons/": "./jsm/"
+				}
+			}
+		</script>
+
+		<script type="module">
+
+			import * as THREE from 'three/webgpu';
+			import { instanceIndex, uniformArray, vec4 } from 'three/tsl';
+
+			import { Inspector } from 'three/addons/inspector/Inspector.js';
+
+			const renderer = new THREE.WebGPURenderer();
+			renderer.setPixelRatio( window.devicePixelRatio );
+			renderer.setSize( window.innerWidth, window.innerHeight );
+			renderer.inspector = new Inspector();
+			document.body.appendChild( renderer.domElement );
+
+			await renderer.init();
+
+			const isWebGL = renderer.backend.isWebGLBackend === true;
+			document.getElementById( 'backend' ).textContent = isWebGL ? 'WebGL' : 'WebGPU';
+
+			const scene = new THREE.Scene();
+			scene.background = new THREE.Color( 0x444444 );
+
+			const camera = new THREE.PerspectiveCamera( 50, window.innerWidth / window.innerHeight, 0.1, 100 );
+			camera.position.z = 5;
+
+			// Matrix2.elements is column-major, so each mat2 packs rgba as columns ( r, g ) and ( b, a ).
+			const colors = uniformArray( [
+				new THREE.Matrix2().fromArray( [ 1, 0, 0, 1 ] ),
+				new THREE.Matrix2().fromArray( [ 1, 1, 0, 1 ] )
+			], 'mat2' );
+
+			const colorMatrix = colors.element( instanceIndex );
+
+			const material = new THREE.MeshBasicNodeMaterial();
+			material.colorNode = vec4( colorMatrix[ 0 ], colorMatrix[ 1 ] );
+
+			const mesh = new THREE.InstancedMesh( new THREE.BoxGeometry(), material, 2 );
+			mesh.setMatrixAt( 0, new THREE.Matrix4().makeTranslation( - 1, 0, 0 ) );
+			mesh.setMatrixAt( 1, new THREE.Matrix4().makeTranslation( 1, 0, 0 ) );
+			mesh.rotation.set( 0.5, 0.5, 0 );
+			scene.add( mesh );
+
+			await renderer.compileAsync( scene, camera );
+
+			const buffer = colors.value;
+			const floatsPerMat2 = isWebGL ? 8 : 4;
+			const read = ( index ) => index < buffer.length ? buffer[ index ] : 'out of range';
+
+			console.log( `Backend: ${ isWebGL ? 'WebGL (std140)' : 'WebGPU (WGSL)' }` );
+			console.log( 'Buffer written by UniformArrayNode:', Array.from( buffer ) );
+			console.log( `Buffer size: ${ buffer.byteLength } bytes, the shader expects ${ colors.array.length * floatsPerMat2 * 4 } bytes` );
+
+			for ( let i = 0; i < colors.array.length; i ++ ) {
+
+				const offset = i * floatsPerMat2;
+				const columnOffset = floatsPerMat2 / 2;
+
+				console.log( `mat2[ ${ i } ] written:`, colors.array[ i ].elements );
+				console.log( `mat2[ ${ i } ] read by the shader:`, [ read( offset ), read( offset + 1 ), read( offset + columnOffset ), read( offset + columnOffset + 1 ) ] );
+
+			}
+
+			const shader = await renderer.debug.getShaderAsync( scene, camera, mesh );
+			console.log( 'Shader declaration:', shader.fragmentShader.split( '\n' ).filter( ( line ) => /mat2|std140|uniform NodeBuffer|var<uniform>/.test( line ) ).join( '\n' ) );
+
+			renderer.setAnimationLoop( () => renderer.render( scene, camera ) );
+
+		</script>
+
+	</body>
+</html>
