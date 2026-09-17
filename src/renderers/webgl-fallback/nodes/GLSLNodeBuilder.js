@@ -1015,6 +1015,45 @@ ${ flowData.code }
 	}
 
 	/**
+ * Returns the GPU memory length for the given data type in 4-byte elements.
+ * At times, the amount of memory required to represent a type may be larger
+ * than the number of elements that type represents.
+ *
+ * @param {string} type - The data type.
+ * @return {number} The memory length in 4-byte elements.
+ */
+	getTypeMemoryLength( type ) {
+
+		if ( /mat2/.test( type ) ) {
+
+			return 8;
+
+		}
+
+		return super.getTypeMemoryLength( type );
+
+	}
+
+	/**
+ 	* Returns the alignment requirement for the given data type in 4-byte elements.
+ 	* The alignment refers to how adjacent types must be spaced within contiguous GPU memory
+ 	*
+ 	* @param {string} type - The data type.
+ 	* @return {number} The alignment requirement in 4-byte elements.
+ */
+	getTypeMemoryAlignment( type ) {
+
+		if ( /mat2/.test( type ) ) {
+
+			return 4;
+
+		}
+
+		return super.getTypeMemoryAlignment( type );
+
+	}
+
+	/**
 	 * Returns the type for a given buffer attribute.
 	 *
 	 * @param {BufferAttribute} attribute - The buffer attribute.

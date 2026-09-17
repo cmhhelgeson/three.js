@@ -175,20 +175,23 @@ export function getLengthFromType( type ) {
 }
 
 /**
- * Returns the gpu memory length for the given data type in 4-byte elements.
+ * Returns the GPU memory length for the given data type in 4-byte elements.
+ * The result depends on the memory layout of the backend: WGSL buffers and
+ * WebGPU storage buffers use the default layout, while GLSL uniform blocks use std140.
  *
  * @private
  * @method
  * @param {string} type - The data type.
+ * @param {boolean} [std140=false] - Whether to use the std140 layout rules.
  * @return {number} The memory length in 4-byte elements.
  */
-export function getMemoryLengthFromType( type ) {
+export function getMemoryLengthFromType( type, std140 = false ) {
 
 	if ( /float|int|uint|bool/.test( type ) ) return 1;
 	if ( /vec2/.test( type ) ) return 2;
 	if ( /vec3/.test( type ) ) return 3;
 	if ( /vec4/.test( type ) ) return 4;
-	if ( /mat2/.test( type ) ) return 4;
+	if ( /mat2/.test( type ) ) return std140 ? 8 : 4;
 	if ( /mat3/.test( type ) ) return 12;
 	if ( /mat4/.test( type ) ) return 16;
 
@@ -198,19 +201,22 @@ export function getMemoryLengthFromType( type ) {
 
 /**
  * Returns the alignment requirement for the given data type in 4-byte elements.
+ * The result depends on the memory layout of the backend: WGSL buffers and
+ * WebGPU storage buffers use the default layout, while GLSL uniform blocks use std140.
  *
  * @private
  * @method
  * @param {string} type - The data type.
+ * @param {boolean} [std140=false] - Whether to use the std140 layout rules.
  * @return {number} The alignment requirement in 4-byte elements.
  */
-export function getAlignmentFromType( type ) {
+export function getAlignmentFromType( type, std140 = false ) {
 
 	if ( /float|int|uint|bool/.test( type ) ) return 1;
 	if ( /vec2/.test( type ) ) return 2;
 	if ( /vec3/.test( type ) ) return 4;
 	if ( /vec4/.test( type ) ) return 4;
-	if ( /mat2/.test( type ) ) return 2;
+	if ( /mat2/.test( type ) ) return std140 ? 4 : 2;
 	if ( /mat3/.test( type ) ) return 4;
 	if ( /mat4/.test( type ) ) return 4;
 

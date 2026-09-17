@@ -110,6 +110,14 @@ class UniformArrayNode extends BufferNode {
 		this.paddedType = this.getPaddedType();
 
 		/**
+		 * The memory length of the padded type.
+		 * Must be configured by the builder.
+		 *
+		 * @type {number | null}
+		 */
+		 this.paddedMemoryLength = null;
+
+		/**
 		 * Overwritten since uniform array nodes are updated per render.
 		 *
 		 * @type {string}
@@ -249,15 +257,32 @@ class UniformArrayNode extends BufferNode {
 
 		} else if ( elementType === 'mat2' ) {
 
+			console.log( 'test' );
+
 			for ( let i = 0; i < array.length; i ++ ) {
 
-				const index = i * 4;
+				const index = i * this.paddedMemoryLength;
 				const matrix = array[ i ];
 
-				value[ index ] = matrix.elements[ 0 ];
-				value[ index + 1 ] = matrix.elements[ 1 ];
-				value[ index + 2 ] = matrix.elements[ 2 ];
-				value[ index + 3 ] = matrix.elements[ 3 ];
+				if ( this.paddedMemoryLength === 8 ) {
+
+					// Corresponds to WebGL Backend
+
+					value[ index ] = matrix.elements[ 0 ];
+					value[ index + 1 ] = matrix.elements[ 1 ];
+					// 2 element offset
+					value[ index + 4 ] = matrix.elements[ 2 ];
+					value[ index + 5 ] = matrix.elements[ 3 ];
+
+
+				} else {
+
+					value[ index ] = matrix.elements[ 0 ];
+					value[ index + 1 ] = matrix.elements[ 1 ];
+					value[ index + 2 ] = matrix.elements[ 2 ];
+					value[ index + 3 ] = matrix.elements[ 3 ];
+
+				}
 
 			}
 
@@ -325,18 +350,16 @@ class UniformArrayNode extends BufferNode {
 	 */
 	setup( builder ) {
 
+		const { elementType, paddedType } = this;
+
 		const length = this.array.length;
-		const elementType = this.elementType;
+		this.paddedMemoryLength = builder.getTypeMemoryLength( this.paddedType );
 
 		let arrayType = Float32Array;
-
-		const paddedType = this.paddedType;
-		const paddedElementLength = builder.getTypeLength( paddedType );
-
 		if ( elementType.charAt( 0 ) === 'i' ) arrayType = Int32Array;
 		if ( elementType.charAt( 0 ) === 'u' ) arrayType = Uint32Array;
 
-		this.value = new arrayType( length * paddedElementLength );
+		this.value = new arrayType( length * this.paddedMemoryLength );
 		this.bufferCount = length;
 		this.bufferType = paddedType;
 

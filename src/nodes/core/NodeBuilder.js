@@ -1826,7 +1826,8 @@ class NodeBuilder {
 	}
 
 	/**
-	 * Returns the length for the given data type.
+	 * Returns the length for the given data type in 4-byte elements.
+	 * The length of a type must correspond to the number of 4-byte elements it represents.
 	 *
 	 * @param {string} type - The data type.
 	 * @return {number} The length.
@@ -1843,6 +1844,49 @@ class NodeBuilder {
 		if ( /mat4/.test( type ) === true ) return 16;
 
 		return 0;
+
+	}
+
+	/**
+ * Returns the GPU memory length for the given data type in 4-byte elements.
+ * At times, the amount of memory required to represent a type may be larger
+ * than the number of elements that type represents.
+ *
+ * @param {string} type - The data type.
+ * @return {number} The memory length in 4-byte elements.
+ */
+	getTypeMemoryLength( type ) {
+
+		if ( /float|int|uint|bool/.test( type ) ) return 1;
+		if ( /vec2/.test( type ) ) return 2;
+		if ( /vec3/.test( type ) ) return 3;
+		if ( /vec4/.test( type ) ) return 4;
+		if ( /mat2/.test( type ) ) return 4;
+		if ( /mat3/.test( type ) ) return 12;
+		if ( /mat4/.test( type ) ) return 16;
+
+		error( `TSL: Unsupported type: ${ type }` );
+
+	}
+
+	/**
+ 	* Returns the alignment requirement for the given data type in 4-byte elements.
+ 	* The alignment refers to how adjacent types must be spaced within contiguous GPU memory
+ 	*
+ 	* @param {string} type - The data type.
+ 	* @return {number} The alignment requirement in 4-byte elements.
+ */
+	getTypeMemoryAlignment( type ) {
+
+		if ( /float|int|uint|bool/.test( type ) ) return 1;
+		if ( /vec2/.test( type ) ) return 2;
+		if ( /vec3/.test( type ) ) return 4;
+		if ( /vec4/.test( type ) ) return 4;
+		if ( /mat2/.test( type ) ) return 2;
+		if ( /mat3/.test( type ) ) return 4;
+		if ( /mat4/.test( type ) ) return 4;
+
+		error( `TSL: Unsupported type: ${ type }` );
 
 	}
 

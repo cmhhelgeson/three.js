@@ -1,6 +1,5 @@
 
 import Node from './Node.js';
-import { getAlignmentFromType, getMemoryLengthFromType } from './NodeUtils.js';
 
 /**
  * Generates a layout for struct members.
@@ -76,6 +75,16 @@ class StructTypeNode extends Node {
 		 */
 		this.isStructTypeNode = true;
 
+		/**
+		 * The length of the struct in 4-byte elements
+		 * Must be assigned by the `setup` build step.
+		 *
+		 * @type {number | null}
+		 * @readonly
+		 * @default true
+		 */
+		this.structLength = null;
+
 	}
 
 	/**
@@ -85,32 +94,41 @@ class StructTypeNode extends Node {
 	 *
 	 * @returns {number} The length of the struct in 4-byte elements.
 	 */
-	getLength() {
+	getLength( builder ) {
 
-		let maxAlignment = 1; // maximum alignment value in this struct
-		let offset = 0; // global buffer offset in 4 byte elements
+		// Lazily get necessary struct length based on memory requirements
+		// on block memory requirements of the graphics backend
 
-		for ( const member of this.membersLayout ) {
+		if ( this.structLength === null ) {
 
-			const type = member.type;
+			let maxAlignment = 1; // maximum alignment value in this struct
+			let offset = 0; // global buffer offset in 4 byte elements
 
-			const itemSize = getMemoryLengthFromType( type );
-			const alignment = getAlignmentFromType( type );
-			maxAlignment = Math.max( maxAlignment, alignment );
+			for ( const member of this.membersLayout ) {
 
-			const chunkOffset = offset % maxAlignment; // offset in the current chunk of maxAlignment elements
-			const overhang = chunkOffset % alignment; // distance from the last aligned offset
-			if ( overhang !== 0 ) {
+				const type = member.type;
 
-				offset += alignment - overhang; // move to next aligned offset
+				const itemMemorySize = builder.getTypeMemoryLength( type );
+				const alignment = builder.getTypeMemoryAlignment( type );
+				maxAlignment = Math.max( maxAlignment, alignment );
+
+				const chunkOffset = offset % maxAlignment; // offset in the current chunk of maxAlignment elements
+				const overhang = chunkOffset % alignment; // distance from the last aligned offset
+				if ( overhang !== 0 ) {
+
+					offset += alignment - overhang; // move to next aligned offset
+
+				}
+
+				offset += itemMemorySize;
 
 			}
 
-			offset += itemSize;
+			this.structLength = Math.ceil( offset / maxAlignment ) * maxAlignment;
 
 		}
 
-		return ( Math.ceil( offset / maxAlignment ) * maxAlignment ); // ensure length is a multiple of maxAlignment
+		return this.structLength;
 
 	}
 
@@ -132,6 +150,7 @@ class StructTypeNode extends Node {
 
 	setup( builder ) {
 
+		this.getLength( builder );
 		builder.getStructTypeFromNode( this, this.membersLayout, this.name );
 		builder.addInclude( this );
 
