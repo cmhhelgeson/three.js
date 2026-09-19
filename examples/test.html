@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgpu - uniform array of structs</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link type="text/css" rel="stylesheet" href="example.css">
+		<style>
+			.label {
+				color: #fff;
+				font-family: monospace;
+				text-align: center;
+				text-shadow: 0 0 4px #000;
+				pointer-events: none;
+			}
+
+			.label b {
+				display: block;
+				font-size: 16px;
+				margin-bottom: 4px;
+			}
+
+			.label span {
+				font-size: 12px;
+				color: #ccc;
+			}
+
+			#result {
+				font-family: monospace;
+				font-weight: bold;
+			}
+
+			#result.pass {
+				color: #6f6;
+			}
+
+			#result.fail {
+				color: #f66;
+			}
+		</style>
+	</head>
+	<body>
+
+		<div id="info">
+			<div class="title-wrapper">
+				<a href="https://threejs.org/" target="_blank" rel="noopener">three.js</a><span>Uniform Array of Structs</span>
+			</div>
+
+			<small>
+				Six instances read <code>color</code>, <code>colorTwo</code>, <code>position</code>, <code>constant</code> and <code>rotation</code> from a single uniform array of structs.<br/>
+				Expected: six cubes evenly spaced around a circle, each growing steadily larger and spinning further counter-clockwise from red, with every face fading left to right from its colour to that colour's inverse.<br/>
+				Backend: <span id="backend"></span>. CPU buffer check: <span id="result">running&hellip;</span>. See the console for the full buffer layout.
+			</small>
+		</div>
+
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../build/three.webgpu.js",
+					"three/webgpu": "../build/three.webgpu.js",
+					"three/tsl": "../build/three.tsl.js",
+					"three/addons/": "./jsm/"
+				}
+			}
+		</script>
+
+		<script type="module">
+
+			import * as THREE from 'three/webgpu';
+			import { Fn, instanceIndex, mix, positionLocal, struct, uniformArray, uv, vec3 } from 'three/tsl';
+
+			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+			import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+			import { Inspector } from 'three/addons/inspector/Inspector.js';
+
+			const renderer = new THREE.WebGPURenderer( { antialias: true } );
+			renderer.setPixelRatio( window.devicePixelRatio );
+			renderer.setSize( window.innerWidth, window.innerHeight );
+			renderer.inspector = new Inspector();
+			document.body.appendChild( renderer.domElement );
+
+			const labelRenderer = new CSS2DRenderer();
+			labelRenderer.setSize( window.innerWidth, window.innerHeight );
+			labelRenderer.domElement.style.position = 'absolute';
+			labelRenderer.domElement.style.top = '0px';
+			labelRenderer.domElement.style.pointerEvents = 'none';
+			document.body.appendChild( labelRenderer.domElement );
+
+			await renderer.init();
+
+			const isWebGL = renderer.backend.isWebGLBackend === true;
+			document.getElementById( 'backend' ).textContent = isWebGL ? 'WebGL' : 'WebGPU';
+
+			const scene = new THREE.Scene();
+			scene.background = new THREE.Color( 0x222222 );
+
+			const camera = new THREE.PerspectiveCamera( 45, window.innerWidth / window.innerHeight, 0.1, 100 );
+			camera.position.set( 0, 0, 16 );
+
+			const controls = new OrbitControls( camera, renderer.domElement );
+			controls.enableDamping = true;
+			controls.minDistance = 4;
+			controls.maxDistance = 40;
+			controls.update();
+
+			// The struct under test. Its WGSL layout is:
+			//
+			// struct CubeData {                              //             align(16) size(64)
+			//     color: vec3<f32>,                          // offset(0)   align(16) size(12)
+			//     // -- implicit member alignment padding -- // offset(12)            size(4)
+			//     rotation: vec2<f32>,                       // offset(16)  align(8)  size(8)
+			//     // -- implicit member alignment padding -- // offset(24)            size(8)
+			//     colorTwo: vec3<f32>,                       // offset(32)  align(16) size(12)
+			//     // -- implicit member alignment padding -- // offset(44)            size(4)
+			//     position: vec3<f32>,                       // offset(48)  align(16) size(12)
+			//     constant: f32,                             // offset(60)  align(4)  size(4)
+			// }
+			//
+			// `rotation` sits between the first and second vec3, which is the worst
+			// place for it: its own alignment is only 8, but the vec3 that follows
+			// needs 16, so the 8 bytes it does not fill (offset 24) are wasted. Every
+			// vec3 still opens its own 16 byte chunk, and `constant` tucks into the
+			// gap `position` leaves at offset 60 rather than opening a fifth chunk.
+			// The struct is 64 bytes either way, but only 44 of them carry data.
+
+			const cubeStruct = struct( {
+				color: 'vec3',
+				rotation: 'vec2',
+				colorTwo: 'vec3',
+				position: 'vec3',
+				constant: 'float'
+			}, 'CubeData' );
+
+			// float slots covered by a member; everything else is padding and must stay zero.
+			const MEMBER_LENGTHS = { float: 1, vec2: 2, vec3: 3 };
+
+			const COUNT = 6;
+			const RADIUS = 4;
+
+			// Pure on/off RGB, so a misread channel is unmistakable.
+			const CUBE_COLORS = [
+				[ 1, 0, 0 ], // red
+				[ 0, 1, 0 ], // green
+				[ 0, 0, 1 ], // blue
+				[ 1, 1, 0 ], // yellow
+				[ 0, 1, 1 ], // cyan
+				[ 1, 0, 1 ] // magenta
+			];
+
+			const CUBE_COLOR_NAMES = [ 'red', 'green', 'blue', 'yellow', 'cyan', 'magenta' ];
+
+			const cubeData = [];
+
+			for ( let i = 0; i < COUNT; i ++ ) {
+
+				const angle = i / COUNT * Math.PI * 2;
+
+				const [ r, g, b ] = CUBE_COLORS[ i ];
+
+				cubeData.push( {
+					color: new THREE.Color( r, g, b ),
+					rotation: new THREE.Vector2( Math.cos( angle ), Math.sin( angle ) ), // ( cos, sin ) of the instance angle
+					// The inverse, so the gradient across uv.x is unmistakable.
+					colorTwo: new THREE.Color( 1 - r, 1 - g, 1 - b ),
+					position: new THREE.Vector3( Math.cos( angle ) * RADIUS, Math.sin( angle ) * RADIUS, 0 ),
+					constant: 0.5 + i * 0.2 // per instance scale, distinct for every index
+				} );
+
+			}
+
+			const cubes = uniformArray( cubeData, cubeStruct );
+			const cube = cubes.element( instanceIndex );
+
+			const material = new THREE.MeshBasicNodeMaterial();
+
+			// Left edge of every face is `color`, right edge is `colorTwo`.
+			material.colorNode = mix( cube.get( 'color' ), cube.get( 'colorTwo' ), uv().x );
+
+			// Scale by `constant`, spin around Z by `rotation` ( cos, sin ), then
+			// offset by `position`. Every member drives something visible.
+			material.positionNode = Fn( () => {
+
+				const rotation = cube.get( 'rotation' );
+				const scaled = positionLocal.mul( cube.get( 'constant' ) ).toVar();
+
+				const rotated = vec3(
+					scaled.x.mul( rotation.x ).sub( scaled.y.mul( rotation.y ) ),
+					scaled.x.mul( rotation.y ).add( scaled.y.mul( rotation.x ) ),
+					scaled.z
+				);
+
+				return rotated.add( cube.get( 'position' ) );
+
+			} )();
+
+			const boxGeometry = new THREE.BoxGeometry( 1, 1, 1 );
+
+			const mesh = new THREE.InstancedMesh( boxGeometry, material, COUNT );
+
+			// Every instance matrix is the identity, so placement and size come only
+			// from the struct. A cube in the wrong spot means a misread member.
+			const identity = new THREE.Matrix4();
+
+			for ( let i = 0; i < COUNT; i ++ ) {
+
+				mesh.setMatrixAt( i, identity );
+
+			}
+
+			// positionNode moves the vertices well outside the instance bounds.
+			mesh.frustumCulled = false;
+			scene.add( mesh );
+
+			for ( let i = 0; i < COUNT; i ++ ) {
+
+				const { position, constant } = cubeData[ i ];
+
+				const element = document.createElement( 'div' );
+				element.className = 'label';
+				element.innerHTML = `<b>[ ${ i } ] ${ CUBE_COLOR_NAMES[ i ] }</b><span>scale ${ constant.toFixed( 1 ) } · spin ${ ( i * 60 ) }°</span>`;
+
+				const label = new CSS2DObject( element );
+				label.position.set( position.x, position.y + 1.2, position.z );
+				scene.add( label );
+
+			}
+
+			window.addEventListener( 'resize', onWindowResize );
+
+			// The buffer is not allocated until the node is built.
+			await renderer.compileAsync( scene, camera );
+
+			checkBufferLayout();
+
+			const shader = await renderer.debug.getShaderAsync( scene, camera, mesh );
+			console.log( 'vertex shader:', shader.vertexShader );
+			console.log( 'fragment shader:', shader.fragmentShader );
+
+			renderer.setAnimationLoop( animate );
+
+			function checkBufferLayout() {
+
+				const { membersLayout, structLength } = cubeStruct;
+				const buffer = cubes.value;
+
+				console.log( `struct CubeData: ${ structLength } floats ( ${ structLength * 4 } bytes ) per element` );
+				console.table( membersLayout.map( ( { name, type, offset } ) => ( {
+					member: name,
+					type: type,
+					'offset (floats)': offset,
+					'offset (bytes)': offset * 4
+				} ) ) );
+
+				console.log( `buffer: ${ buffer.length } floats ( ${ buffer.byteLength } bytes ), expected ${ COUNT * structLength } floats` );
+				console.log( 'buffer written by UniformArrayNode:', Array.from( buffer ) );
+
+				const offsetOf = ( name ) => membersLayout.find( ( member ) => member.name === name ).offset;
+
+				const covered = new Set();
+
+				for ( const { type, offset } of membersLayout ) {
+
+					for ( let c = 0; c < MEMBER_LENGTHS[ type ]; c ++ ) covered.add( offset + c );
+
+				}
+
+				const paddingOffsets = Array.from( { length: structLength }, ( _, i ) => i ).filter( ( i ) => covered.has( i ) === false );
+
+				console.log( `padding floats within each element: ${ paddingOffsets.join( ', ' ) }` );
+
+				const rows = [];
+				let failures = 0;
+
+				for ( let i = 0; i < COUNT; i ++ ) {
+
+					const base = i * structLength;
+					const data = cubeData[ i ];
+
+					const expected = [
+						[ 'color', [ data.color.r, data.color.g, data.color.b ]],
+						[ 'rotation', [ data.rotation.x, data.rotation.y ]],
+						[ 'colorTwo', [ data.colorTwo.r, data.colorTwo.g, data.colorTwo.b ]],
+						[ 'position', [ data.position.x, data.position.y, data.position.z ]],
+						[ 'constant', [ data.constant ]]
+					];
+
+					for ( const [ name, values ] of expected ) {
+
+						const offset = offsetOf( name );
+						const actual = Array.from( buffer.slice( base + offset, base + offset + values.length ) );
+
+						// The buffer is a Float32Array, so round the expectation the same way.
+						const ok = values.every( ( value, component ) => Math.fround( value ) === actual[ component ] );
+
+						if ( ok === false ) failures ++;
+
+						rows.push( {
+							instance: i,
+							member: name,
+							'offset (floats)': base + offset,
+							expected: values.map( ( value ) => Math.fround( value ) ).join( ', ' ),
+							actual: actual.join( ', ' ),
+							result: ok ? 'pass' : 'FAIL'
+						} );
+
+					}
+
+					// Every float not claimed by a member is padding and must stay zero.
+					// A stray write from an over-eager member shows up here.
+					for ( const offset of paddingOffsets ) {
+
+						const padding = buffer[ base + offset ];
+						const ok = padding === 0;
+
+						if ( ok === false ) failures ++;
+
+						rows.push( {
+							instance: i,
+							member: '<padding>',
+							'offset (floats)': base + offset,
+							expected: '0',
+							actual: String( padding ),
+							result: ok ? 'pass' : 'FAIL'
+						} );
+
+					}
+
+				}
+
+				console.table( rows );
+
+				const result = document.getElementById( 'result' );
+
+				if ( failures === 0 ) {
+
+					result.textContent = `pass ( ${ rows.length } members aligned )`;
+					result.className = 'pass';
+					console.log( '%cCPU buffer check passed: every member landed on its expected offset.', 'color: #6f6' );
+
+				} else {
+
+					result.textContent = `FAIL ( ${ failures } of ${ rows.length } members misaligned )`;
+					result.className = 'fail';
+					console.error( `CPU buffer check failed: ${ failures } members did not land on their expected offset.` );
+
+				}
+
+			}
+
+			function onWindowResize() {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				labelRenderer.setSize( window.innerWidth, window.innerHeight );
+
+			}
+
+			function animate() {
+
+				controls.update();
+
+				renderer.render( scene, camera );
+				labelRenderer.render( scene, camera );
+
+			}
+
+		</script>
+
+	</body>
+</html>
