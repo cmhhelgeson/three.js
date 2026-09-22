@@ -12,6 +12,7 @@ import WebGPUBindingUtils from './utils/WebGPUBindingUtils.js';
 import WebGPUCapabilities from './utils/WebGPUCapabilities.js';
 import WebGPUPipelineUtils from './utils/WebGPUPipelineUtils.js';
 import WebGPUTextureUtils from './utils/WebGPUTextureUtils.js';
+import WebGPURenderPassCommands from './utils/WebGPURenderPassCommands.js';
 
 import { WebGPUCoordinateSystem, TimestampQuery, REVISION, HalfFloatType, Compatibility, CustomBlending } from '../../constants.js';
 import { Color } from '../../math/Color.js';
@@ -175,6 +176,16 @@ class WebGPUBackend extends Backend {
 		 * @type {Map<number,GPUBuffer>}
 		 */
 		this.occludedResolveCache = new Map();
+
+		/**
+		 * A pool of reusable render pass recordings. Recordings keep their command
+		 * buffer across frames, so pooling them means a steady state frame records
+		 * without allocating.
+		 *
+		 * @private
+		 * @type {Array<WebGPURenderPassCommands>}
+		 */
+		this._passCommandsPool = [];
 
 		// compatibility checks
 
@@ -1081,6 +1092,13 @@ class WebGPUBackend extends Backend {
 		const encoder = device.createCommandEncoder( _commandEncoderDescriptor );
 		_commandEncoderDescriptor.reset();
 
+		// Recorded passes from the previous frame are always consumed by
+		// finishRender(), but clear defensively so an aborted frame cannot replay
+		// stale segments against this frame's encoder.
+
+		if ( renderContextData.passSegments === undefined ) renderContextData.passSegments = [];
+		else renderContextData.passSegments.length = 0;
+
 		// Layered render targets: prepare bundle encoders for each camera in the array camera.
 
 		if ( this._isRenderCameraDepthArray( renderContext ) === true ) {
@@ -1109,8 +1127,13 @@ class WebGPUBackend extends Backend {
 			renderContextData.bundleSets = undefined;
 			renderContextData.arrayCameraRenderStages = undefined;
 
-			const currentPass = encoder.beginRenderPass( descriptor );
-			renderContextData.currentPass = currentPass;
+			// No render pass is opened here. Commands are recorded into a
+			// WebGPURenderPassCommands and replayed onto a real pass encoder in
+			// finishRender(). Leaving no pass open while the scene is traversed is
+			// what allows a nested render, triggered from an updateBefore() call,
+			// to run to completion before this context's pass is ever begun.
+
+			renderContextData.currentPass = this._createPassSegment( renderContextData );
 
 			if ( renderContext.viewport ) {
 
@@ -1133,6 +1156,91 @@ class WebGPUBackend extends Backend {
 		renderContextData.renderBundles = [];
 
 		this._resetRenderContextData( renderContextData );
+
+	}
+
+	/**
+	 * Opens a new recorded render pass segment on the given render context.
+	 *
+	 * A render context is a list of segments rather than a single pass, because a
+	 * framebuffer copy has to be encoded between the draws made before it and the
+	 * draws made after it. Each segment becomes one `beginRenderPass()` when
+	 * {@link WebGPUBackend#_replayPassSegments} runs.
+	 *
+	 * @private
+	 * @param {Object} renderContextData - The render context data.
+	 * @param {boolean} [loadOnly=false] - Whether the segment must load the previous contents rather than clear them.
+	 * @return {WebGPURenderPassCommands} The recording to write subsequent commands into.
+	 */
+	_createPassSegment( renderContextData, loadOnly = false ) {
+
+		const commands = this._passCommandsPool.pop() || new WebGPURenderPassCommands();
+
+		commands.reset();
+
+		if ( renderContextData.passSegments === undefined ) renderContextData.passSegments = [];
+
+		renderContextData.passSegments.push( { commands, loadOnly } );
+
+		return commands;
+
+	}
+
+	/**
+	 * Replays every recorded segment of a render context, in order, onto a single
+	 * command encoder.
+	 *
+	 * @private
+	 * @param {RenderContext} renderContext - The render context.
+	 * @param {Object} renderContextData - The render context data.
+	 * @param {GPUCommandEncoder} encoder - The encoder to replay onto.
+	 */
+	_replayPassSegments( renderContext, renderContextData, encoder ) {
+
+		const { descriptor, passSegments } = renderContextData;
+
+		for ( let i = 0; i < passSegments.length; i ++ ) {
+
+			const segment = passSegments[ i ];
+
+			if ( segment.framebufferCopy !== undefined ) {
+
+				const { texture, sourceGPU, destinationGPU, rectangle, generateMipmaps } = segment.framebufferCopy;
+
+				this._copyFramebufferToTexture( encoder, texture, sourceGPU, destinationGPU, rectangle, 0, generateMipmaps );
+
+				continue;
+
+			}
+
+			// Everything a previous segment drew has to survive into this one. The
+			// descriptor's load ops are rebuilt by beginRender() on the next frame,
+			// so mutating them here does not leak across frames.
+
+			if ( segment.loadOnly === true ) {
+
+				for ( let j = 0; j < descriptor.colorAttachments.length; j ++ ) {
+
+					descriptor.colorAttachments[ j ].loadOp = GPULoadOp.Load;
+
+				}
+
+				if ( renderContext.depth ) descriptor.depthStencilAttachment.depthLoadOp = GPULoadOp.Load;
+				if ( renderContext.stencil ) descriptor.depthStencilAttachment.stencilLoadOp = GPULoadOp.Load;
+
+			}
+
+			const passEncoderGPU = encoder.beginRenderPass( descriptor );
+
+			segment.commands.execute( passEncoderGPU );
+
+			passEncoderGPU.end();
+
+			this._passCommandsPool.push( segment.commands.reset() );
+
+		}
+
+		passSegments.length = 0;
 
 	}
 
@@ -1516,7 +1624,7 @@ class WebGPUBackend extends Backend {
 
 		} else if ( renderContextData.currentPass ) {
 
-		  renderContextData.currentPass.end();
+			this._replayPassSegments( renderContext, renderContextData, encoder );
 
 		}
 
@@ -3133,41 +3241,28 @@ class WebGPUBackend extends Backend {
 
 		}
 
-		let encoder;
-
 		if ( renderContextData.currentPass ) {
 
-			renderContextData.currentPass.end();
+			// The pass this copy interrupts has only been recorded, not encoded, so
+			// the copy is queued as a segment boundary instead. finishRender() will
+			// end the preceding pass, encode the copy and open a loading pass for
+			// everything recorded after this point, all on the one encoder.
+			//
+			// The rectangle is copied because the caller reuses it, and the copy
+			// does not run until finishRender().
 
-			encoder = renderContextData.encoder;
+			renderContextData.passSegments.push( {
+				framebufferCopy: {
+					texture,
+					sourceGPU,
+					destinationGPU,
+					rectangle: { x: rectangle.x, y: rectangle.y, z: rectangle.z, w: rectangle.w },
+					// ViewportTextureNode restores this flag before the deferred copy executes.
+					generateMipmaps
+				}
+			} );
 
-		} else {
-
-			_commandEncoderDescriptor.label = 'copyFramebufferToTexture_' + texture.id;
-			encoder = this.device.createCommandEncoder( _commandEncoderDescriptor );
-			_commandEncoderDescriptor.reset();
-
-		}
-
-		// mipmaps must be genereated with the same encoder otherwise the copied texture data
-		// might be out-of-sync, see #31768
-
-		this._copyFramebufferToTexture( encoder, texture, sourceGPU, destinationGPU, rectangle, 0, generateMipmaps );
-
-		if ( renderContextData.currentPass ) {
-
-			const { descriptor } = renderContextData;
-
-			for ( let i = 0; i < descriptor.colorAttachments.length; i ++ ) {
-
-				descriptor.colorAttachments[ i ].loadOp = GPULoadOp.Load;
-
-			}
-
-			if ( renderContext.depth ) descriptor.depthStencilAttachment.depthLoadOp = GPULoadOp.Load;
-			if ( renderContext.stencil ) descriptor.depthStencilAttachment.stencilLoadOp = GPULoadOp.Load;
-
-			renderContextData.currentPass = encoder.beginRenderPass( descriptor );
+			renderContextData.currentPass = this._createPassSegment( renderContextData, true );
 
 			this._resetRenderContextData( renderContextData );
 
@@ -3183,11 +3278,20 @@ class WebGPUBackend extends Backend {
 
 			}
 
-		} else {
-
-			submit( this.device, encoder.finish() );
+			return;
 
 		}
+
+		_commandEncoderDescriptor.label = 'copyFramebufferToTexture_' + texture.id;
+		const encoder = this.device.createCommandEncoder( _commandEncoderDescriptor );
+		_commandEncoderDescriptor.reset();
+
+		// mipmaps must be genereated with the same encoder otherwise the copied texture data
+		// might be out-of-sync, see #31768
+
+		this._copyFramebufferToTexture( encoder, texture, sourceGPU, destinationGPU, rectangle, 0, generateMipmaps );
+
+		submit( this.device, encoder.finish() );
 
 	}
 
