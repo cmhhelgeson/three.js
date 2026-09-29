@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import * as THREE from 'three/webgpu';
 import * as TSL from 'three/tsl';
 
 // some helpers below are ported from Blender and converted to TSL
@@ -308,29 +308,37 @@ export function GetWoodPreset( genus, finish ) {
 }
 
 const params = GetWoodPreset( WoodGenuses[ 0 ], Finishes[ 0 ] );
+
+// the values are read from each WoodNodeMaterial instance, so all instances share one shader
+
 const uniforms = {};
 
-uniforms.centerSize = TSL.uniform( params.centerSize ).onObjectUpdate( ( { material } ) => material.centerSize );
-uniforms.largeWarpScale = TSL.uniform( params.largeWarpScale ).onObjectUpdate( ( { material } ) => material.largeWarpScale );
-uniforms.largeGrainStretch = TSL.uniform( params.largeGrainStretch ).onObjectUpdate( ( { material } ) => material.largeGrainStretch );
-uniforms.smallWarpStrength = TSL.uniform( params.smallWarpStrength ).onObjectUpdate( ( { material } ) => material.smallWarpStrength );
-uniforms.smallWarpScale = TSL.uniform( params.smallWarpScale ).onObjectUpdate( ( { material } ) => material.smallWarpScale );
-uniforms.fineWarpStrength = TSL.uniform( params.fineWarpStrength ).onObjectUpdate( ( { material } ) => material.fineWarpStrength );
-uniforms.fineWarpScale = TSL.uniform( params.fineWarpScale ).onObjectUpdate( ( { material } ) => material.fineWarpScale );
-uniforms.ringThickness = TSL.uniform( params.ringThickness ).onObjectUpdate( ( { material } ) => material.ringThickness );
-uniforms.ringBias = TSL.uniform( params.ringBias ).onObjectUpdate( ( { material } ) => material.ringBias );
-uniforms.ringSizeVariance = TSL.uniform( params.ringSizeVariance ).onObjectUpdate( ( { material } ) => material.ringSizeVariance );
-uniforms.ringVarianceScale = TSL.uniform( params.ringVarianceScale ).onObjectUpdate( ( { material } ) => material.ringVarianceScale );
-uniforms.barkThickness = TSL.uniform( params.barkThickness ).onObjectUpdate( ( { material } ) => material.barkThickness );
-uniforms.splotchScale = TSL.uniform( params.splotchScale ).onObjectUpdate( ( { material } ) => material.splotchScale );
-uniforms.splotchIntensity = TSL.uniform( params.splotchIntensity ).onObjectUpdate( ( { material } ) => material.splotchIntensity );
-uniforms.cellScale = TSL.uniform( params.cellScale ).onObjectUpdate( ( { material } ) => material.cellScale );
-uniforms.cellSize = TSL.uniform( params.cellSize ).onObjectUpdate( ( { material } ) => material.cellSize );
-uniforms.darkGrainColor = TSL.uniform( new THREE.Color( params.darkGrainColor ) ).onObjectUpdate( ( { material }, self ) => self.value.set( material.darkGrainColor ) );
-uniforms.lightGrainColor = TSL.uniform( new THREE.Color( params.lightGrainColor ) ).onObjectUpdate( ( { material }, self ) => self.value.set( material.lightGrainColor ) );
-uniforms.transformationMatrix = TSL.uniform( new THREE.Matrix4().copy( params.transformationMatrix ) ).onObjectUpdate( ( { material } ) => material.transformationMatrix );
+uniforms.centerSize = TSL.materialReference( 'centerSize', 'float' );
+uniforms.largeWarpScale = TSL.materialReference( 'largeWarpScale', 'float' );
+uniforms.largeGrainStretch = TSL.materialReference( 'largeGrainStretch', 'float' );
+uniforms.smallWarpStrength = TSL.materialReference( 'smallWarpStrength', 'float' );
+uniforms.smallWarpScale = TSL.materialReference( 'smallWarpScale', 'float' );
+uniforms.fineWarpStrength = TSL.materialReference( 'fineWarpStrength', 'float' );
+uniforms.fineWarpScale = TSL.materialReference( 'fineWarpScale', 'float' );
+uniforms.ringThickness = TSL.materialReference( 'ringThickness', 'float' );
+uniforms.ringBias = TSL.materialReference( 'ringBias', 'float' );
+uniforms.ringSizeVariance = TSL.materialReference( 'ringSizeVariance', 'float' );
+uniforms.ringVarianceScale = TSL.materialReference( 'ringVarianceScale', 'float' );
+uniforms.barkThickness = TSL.materialReference( 'barkThickness', 'float' );
+uniforms.splotchScale = TSL.materialReference( 'splotchScale', 'float' );
+uniforms.splotchIntensity = TSL.materialReference( 'splotchIntensity', 'float' );
+uniforms.cellScale = TSL.materialReference( 'cellScale', 'float' );
+uniforms.cellSize = TSL.materialReference( 'cellSize', 'float' );
+uniforms.darkGrainColor = TSL.materialReference( 'darkGrainColor', 'color' );
+uniforms.lightGrainColor = TSL.materialReference( 'lightGrainColor', 'color' );
+uniforms.transformationMatrix = TSL.materialReference( 'transformationMatrix', 'mat4' );
+uniforms.clearcoat = TSL.materialReference( 'clearcoat', 'float' );
 
-const colorNode = wood(
+// the node material defining the shared shader
+
+const woodMaterial = new THREE.MeshPhysicalNodeMaterial();
+
+woodMaterial.colorNode = wood(
 	uniforms.transformationMatrix.mul( TSL.vec4( TSL.positionLocal, 1 ) ).xyz,
 	uniforms.centerSize,
 	uniforms.largeWarpScale,
@@ -351,6 +359,10 @@ const colorNode = wood(
 	uniforms.darkGrainColor,
 	uniforms.lightGrainColor
 ).mul( params.clearcoatDarken );
+
+// a clearcoat node keeps the clear coat layer in the shared shader, even for instances without a finish
+
+woodMaterial.clearcoatNode = uniforms.clearcoat;
 
 /**
  * Procedural wood material using TSL (Three.js Shading Language).
@@ -377,54 +389,242 @@ const colorNode = wood(
  *   ringThickness: 1/50,  // Override specific parameter
  *   clearcoat: 1    // Add finish
  * });
+ *
+ * @augments ProxyNodeMaterial
  */
-export class WoodNodeMaterial extends THREE.MeshPhysicalMaterial {
+export class WoodNodeMaterial extends THREE.ProxyNodeMaterial {
 
-	static get type() {
-
-		return 'WoodNodeMaterial';
-
-	}
-
+	/**
+	 * Constructs a new wood material. Values that are not provided fall back to the `teak` / `raw` preset.
+	 *
+	 * @param {Object} [params] - An object with one or more properties defining the material's appearance.
+	 */
 	constructor( params = {} ) {
 
-		super();
+		super( woodMaterial );
 
+		this.type = 'WoodNodeMaterial';
+
+		/**
+		 * This flag can be used for type testing.
+		 *
+		 * @type {boolean}
+		 * @readonly
+		 * @default true
+		 */
 		this.isWoodNodeMaterial = true;
 
-		// Get default parameters from teak/raw preset
-		const defaultParams = GetWoodPreset( 'teak', 'raw' );
+		const preset = GetWoodPreset( 'teak', 'raw' );
 
-		// Merge default params with provided params
-		const finalParams = { ...defaultParams, ...params };
+		/**
+		 * Transforms the local position before the wood pattern is evaluated.
+		 *
+		 * @type {Matrix4}
+		 * @default (identity matrix)
+		 */
+		this.transformationMatrix = preset.transformationMatrix;
 
-		for ( const key in finalParams ) {
+		/**
+		 * How strongly the grain warps away from the center of the log.
+		 *
+		 * @type {number}
+		 * @default 1.11
+		 */
+		this.centerSize = preset.centerSize;
 
-			if ( key === 'genus' || key === 'finish' ) continue;
+		/**
+		 * Frequency of the large-scale grain warp across the rings.
+		 *
+		 * @type {number}
+		 * @default 0.32
+		 */
+		this.largeWarpScale = preset.largeWarpScale;
 
-			if ( typeof finalParams[ key ] === 'string' ) {
+		/**
+		 * Frequency of the large-scale grain warp along the length of the log.
+		 *
+		 * @type {number}
+		 * @default 0.24
+		 */
+		this.largeGrainStretch = preset.largeGrainStretch;
 
-				this[ key ] = new THREE.Color( finalParams[ key ] );
+		/**
+		 * Strength of the medium-scale grain warp.
+		 *
+		 * @type {number}
+		 * @default 0.059
+		 */
+		this.smallWarpStrength = preset.smallWarpStrength;
 
-			} else {
+		/**
+		 * Frequency of the medium-scale grain warp.
+		 *
+		 * @type {number}
+		 * @default 2
+		 */
+		this.smallWarpScale = preset.smallWarpScale;
 
-				this[ key ] = finalParams[ key ];
+		/**
+		 * Strength of the fine-scale grain warp.
+		 *
+		 * @type {number}
+		 * @default 0.006
+		 */
+		this.fineWarpStrength = preset.fineWarpStrength;
 
-			}
+		/**
+		 * Frequency of the fine-scale grain warp.
+		 *
+		 * @type {number}
+		 * @default 32.8
+		 */
+		this.fineWarpScale = preset.fineWarpScale;
 
-		}
+		/**
+		 * Thickness of the growth rings.
+		 *
+		 * @type {number}
+		 * @default 1/34
+		 */
+		this.ringThickness = preset.ringThickness;
 
-		this.colorNode = colorNode;
-		this.clearcoatNode = finalParams.clearcoat;
-		this.clearcoatRoughness = finalParams.clearcoatRoughness;
+		/**
+		 * Position of the peak within each ring's profile, in the range `[0, 1]`.
+		 *
+		 * @type {number}
+		 * @default 0.03
+		 */
+		this.ringBias = preset.ringBias;
+
+		/**
+		 * Amount of noise-driven variation in ring spacing.
+		 *
+		 * @type {number}
+		 * @default 0.03
+		 */
+		this.ringSizeVariance = preset.ringSizeVariance;
+
+		/**
+		 * Frequency of the ring spacing variation.
+		 *
+		 * @type {number}
+		 * @default 4.4
+		 */
+		this.ringVarianceScale = preset.ringVarianceScale;
+
+		/**
+		 * Scales the ring profile before it is shaped by `ringBias`.
+		 *
+		 * @type {number}
+		 * @default 0.3
+		 */
+		this.barkThickness = preset.barkThickness;
+
+		/**
+		 * Frequency of the color splotches.
+		 *
+		 * @type {number}
+		 * @default 0.2
+		 */
+		this.splotchScale = preset.splotchScale;
+
+		/**
+		 * Blend strength of the color splotches.
+		 *
+		 * @type {number}
+		 * @default 0.541
+		 */
+		this.splotchIntensity = preset.splotchIntensity;
+
+		/**
+		 * Frequency of the pore cell pattern.
+		 *
+		 * @type {number}
+		 * @default 910
+		 */
+		this.cellScale = preset.cellScale;
+
+		/**
+		 * Size of the pore cells.
+		 *
+		 * @type {number}
+		 * @default 0.1
+		 */
+		this.cellSize = preset.cellSize;
+
+		/**
+		 * Color of the dark grain.
+		 *
+		 * @type {Color}
+		 * @default (0x0c0504)
+		 */
+		this.darkGrainColor = new THREE.Color( preset.darkGrainColor );
+
+		/**
+		 * Color of the light grain.
+		 *
+		 * @type {Color}
+		 * @default (0x926c50)
+		 */
+		this.lightGrainColor = new THREE.Color( preset.lightGrainColor );
+
+		/**
+		 * Intensity of the clear coat layer.
+		 *
+		 * @type {number}
+		 * @default 0
+		 */
+		this.clearcoat = preset.clearcoat;
+
+		/**
+		 * Roughness of the clear coat layer.
+		 *
+		 * @type {number}
+		 * @default 0
+		 */
+		this.clearcoatRoughness = preset.clearcoatRoughness;
+
+		/**
+		 * How much a finish darkens the wood beneath the clear coat. Stored with the
+		 * finish presets, but not applied by the shader.
+		 *
+		 * @type {number}
+		 * @default 1
+		 */
+		this.clearcoatDarken = preset.clearcoatDarken;
+
+		// presets also contain their genus and finish, which are not material properties
+
+		const values = { ...params };
+
+		delete values.genus;
+		delete values.finish;
+
+		this.setValues( values );
 
 	}
 
-	// Static method to create material from preset
+	/**
+	 * Returns a new wood material with the same values.
+	 *
+	 * @return {WoodNodeMaterial} A clone of this instance.
+	 */
+	clone() {
+
+		return new this.constructor().copy( this );
+
+	}
+
+	/**
+	 * Creates a wood material from a preset.
+	 *
+	 * @param {string} [genus='teak'] - The wood genus, one of {@link WoodGenuses}.
+	 * @param {string} [finish='raw'] - The finish, one of {@link Finishes}.
+	 * @return {WoodNodeMaterial} The new wood material.
+	 */
 	static fromPreset( genus = 'teak', finish = 'raw' ) {
 
-		const params = GetWoodPreset( genus, finish );
-		return new WoodNodeMaterial( params );
+		return new WoodNodeMaterial( GetWoodPreset( genus, finish ) );
 
 	}
 
