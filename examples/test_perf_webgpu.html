@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgpu - render call overhead</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link type="text/css" rel="stylesheet" href="main.css">
+	</head>
+	<body>
+
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../build/three.webgpu.js",
+					"three/webgpu": "../build/three.webgpu.js",
+					"three/tsl": "../build/three.tsl.js",
+					"three/addons/": "./jsm/"
+				}
+			}
+		</script>
+
+		<script type="module">
+
+			import * as THREE from 'three/webgpu';
+			import { uniform } from 'three/tsl';
+
+			const COUNT = Number( new URLSearchParams( location.search ).get( 'count' ) || 10000 );
+
+			let renderer, camera;
+
+			init();
+
+			async function init() {
+
+				renderer = new THREE.WebGPURenderer( { antialias: false } );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				renderer.setPixelRatio( 1 );
+				document.body.appendChild( renderer.domElement );
+
+				await renderer.init();
+
+				camera = new THREE.PerspectiveCamera( 40, window.innerWidth / window.innerHeight, 1, 10000 );
+				camera.position.set( 0, 0, 20 );
+
+				const geometry = new THREE.SphereGeometry();
+
+				// Stand-in for the WebGL onBeforeCompile _id uniform: one vec4 that
+				// changes every render, so no render can be trivially skipped.
+				const id = uniform( new THREE.Vector4( 1, 0, 0, 1 ) );
+
+				const material = new THREE.MeshBasicNodeMaterial();
+				material.colorNode = id;
+
+				const mesh = new THREE.Mesh( geometry, material );
+
+				renderer.autoClear = false;
+
+				// Compile and warm up so shader build time stays out of the measurement.
+				await renderer.renderAsync( mesh, camera );
+
+				const device = renderer.backend.device;
+				await device.queue.onSubmittedWorkDone();
+
+				console.time( 'Initial Render' );
+
+				const start = performance.now();
+
+				for ( let i = 0; i < COUNT; i ++ ) {
+
+					id.value.x = i;
+					renderer.render( mesh, camera );
+
+				}
+
+				const cpu = performance.now() - start;
+
+				// Drain the queue so the total includes GPU completion, not just encode.
+				await device.queue.onSubmittedWorkDone();
+
+				const total = performance.now() - start;
+
+				console.timeEnd( 'Initial Render' );
+
+				window.__benchResult = {
+					cpu,
+					total,
+					count: COUNT,
+					revision: THREE.REVISION,
+					adapter: renderer.backend.adapter?.info?.description || renderer.backend.adapter?.info?.vendor || 'unknown'
+				};
+
+			}
+
+		</script>
+
+	</body>
+</html>

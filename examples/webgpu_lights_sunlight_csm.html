@@ -48,6 +48,7 @@
 
 			const params = {
 				showCascades: false,
+				cascades: 2,
 				far: 1000,
 				resolution: 2048,
 				azimuth: 135,
@@ -92,6 +93,48 @@
 				shadow.camera.near = 0.5;
 				shadow.camera.far = params.far * 5;
 				shadow.camera.updateProjectionMatrix();
+
+			}
+
+			// the cascade count of a csm shadow node is fixed once it is built, and the light
+			// keeps its shadow node, so changing the count replaces the light
+
+			function createSunLight() {
+
+				const previousLight = sunLight;
+
+				// like SunLight, the light shines from its position towards the origin
+
+				sunLight = new THREE.DirectionalLight();
+				sunLight.castShadow = true;
+				sunLight.shadow.mapSize.setScalar( params.resolution );
+				sunLight.shadow.normalBias = 0.05;
+				updateShadowRange( sunLight.shadow );
+				scene.add( sunLight );
+
+				if ( previousLight !== undefined ) {
+
+					sunLight.position.copy( previousLight.position );
+					sunLight.color.copy( previousLight.color );
+					sunLight.intensity = previousLight.intensity;
+
+					// the cascade shadow maps are owned by the clones of the light's shadow
+
+					for ( const light of csm.lights ) light.shadow.dispose();
+
+					csm.dispose();
+					scene.remove( previousLight );
+					previousLight.dispose();
+
+				}
+
+				// the practical split and blending between the cascades match SunLightShadow.
+				// the light margin of one shadow distance lets casters outside the view frustum cast into it
+
+				csm = new CSMShadowNode( sunLight, { cascades: params.cascades, maxFar: params.far, mode: 'practical', lightMargin: params.far } );
+				csm.fade = true;
+
+				sunLight.shadow.shadowNode = csm;
 
 			}
 
@@ -163,22 +206,7 @@
 				sky.cloudSpeed.value = 0; // keep the clouds static, like the WebGL version
 				sky.showSunDisc.value = false; // the sun is represented by the light
 
-				// like SunLight, the light shines from its position towards the origin
-
-				sunLight = new THREE.DirectionalLight();
-				sunLight.castShadow = true;
-				sunLight.shadow.mapSize.setScalar( params.resolution );
-				sunLight.shadow.normalBias = 0.05;
-				updateShadowRange( sunLight.shadow );
-				scene.add( sunLight );
-
-				// two cascades with the practical split and blending between them, matching SunLightShadow.
-				// the light margin of one shadow distance lets casters outside the view frustum cast into it
-
-				csm = new CSMShadowNode( sunLight, { cascades: 2, maxFar: params.far, mode: 'practical', lightMargin: params.far } );
-				csm.fade = true;
-
-				sunLight.shadow.shadowNode = csm;
+				createSunLight();
 
 				renderer.init().then( updateSun );
 
@@ -247,6 +275,18 @@
 				gui.add( params, 'showCascades' ).name( 'show cascades' ).onChange( function ( value ) {
 
 					scene.fogNode = value ? tintCascades() : null;
+
+				} );
+
+				gui.add( params, 'cascades', 1, 6 ).step( 1 ).onChange( function ( value ) {
+
+					if ( value === csm.cascades ) return;
+
+					createSunLight();
+
+					// rebuild the tint for the new cascade count
+
+					if ( params.showCascades ) scene.fogNode = tintCascades();
 
 				} );
 
