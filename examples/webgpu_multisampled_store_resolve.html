@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgpu - multisampled store and resolve</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<meta property="og:title" content="three.js webgpu - multisampled store and resolve">
+		<meta property="og:type" content="website">
+		<meta property="og:url" content="https://threejs.org/examples/webgpu_multisampled_store_resolve.html">
+		<meta property="og:image" content="https://threejs.org/examples/screenshots/webgpu_multisampled_store_resolve.jpg">
+		<link type="text/css" rel="stylesheet" href="example.css">
+		<style>
+			#status {
+				position: absolute;
+				left: 16px;
+				bottom: 16px;
+				max-width: calc( 100% - 32px );
+				padding: 8px 10px;
+				font: 12px/1.6 monospace;
+				color: #ddd;
+				background: rgba( 0, 0, 0, 0.6 );
+				border-radius: 4px;
+				pointer-events: none;
+			}
+			#status .flag { color: #8cc8ff; }
+			#status .ok { color: #9be89b; }
+			#status .bad { color: #ff8a80; }
+			#status .neutral { color: #aaa; }
+			#depthLabel {
+				position: absolute;
+				right: 16px;
+				font: 12px monospace;
+				color: #ddd;
+				pointer-events: none;
+			}
+		</style>
+	</head>
+	<body>
+
+		<div id="info">
+			<a href="https://threejs.org/" target="_blank" rel="noopener" class="logo-link"></a>
+
+			<div class="title-wrapper">
+				<a href="https://threejs.org/" target="_blank" rel="noopener">three.js</a><span>Multisampled Store and Resolve</span>
+			</div>
+
+			<small>
+				A low resolution 4x MSAA render target is drawn in two passes. The second pass relies on the<br/>
+				color, depth and stencil samples stored by the first. Toggle the flags to see what each one controls.
+			</small>
+		</div>
+
+		<div id="depthLabel">depth texture</div>
+		<div id="status"></div>
+
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../build/three.webgpu.js",
+					"three/webgpu": "../build/three.webgpu.js",
+					"three/tsl": "../build/three.tsl.js",
+					"three/addons/": "./jsm/"
+				}
+			}
+		</script>
+
+		<script type="module">
+
+			import * as THREE from 'three/webgpu';
+			import { checker, color, float, mix, perspectiveDepthToViewZ, screenCoordinate, texture, uv, vec3, viewZToOrthographicDepth } from 'three/tsl';
+
+			import { Inspector } from 'three/addons/inspector/Inspector.js';
+
+			const FIRST_PASS = 1;
+			const SECOND_PASS = 2;
+
+			const params = {
+				twoPasses: true,
+				multisampling: true,
+				pixelSize: 8,
+				forceWebGL: new URLSearchParams( window.location.search ).has( 'webgl' ),
+				storeMultisampledColorBuffer: true,
+				storeMultisampledDepthBuffer: true,
+				storeMultisampledStencilBuffer: true,
+				resolveColorBuffer: true,
+				resolveDepthBuffer: true,
+				resolveStencilBuffer: true
+			};
+
+			const flags = [
+				'storeMultisampledColorBuffer',
+				'storeMultisampledDepthBuffer',
+				'storeMultisampledStencilBuffer',
+				'resolveColorBuffer',
+				'resolveDepthBuffer',
+				'resolveStencilBuffer'
+			];
+
+			const presets = {
+
+				// the defaults: every multisampled buffer is stored and resolved
+
+				default: [ true, true, true, true, true, true ],
+
+				// the post-processing setup of webgpu_postprocessing_bloom: store nothing and only resolve color
+
+				postProcessing: [ false, false, false, true, false, false ]
+
+			};
+
+			let renderer, camera, scene, timer, renderTarget, needsRenderTarget = false;
+			let knot, portal, spheres, displayQuad, depthQuad;
+
+			const statusElement = document.getElementById( 'status' );
+			const depthLabel = document.getElementById( 'depthLabel' );
+
+			init();
+
+			function init() {
+
+				camera = new THREE.PerspectiveCamera( 50, window.innerWidth / window.innerHeight, 4, 12 );
+				camera.position.set( 0, 0, 8 );
+
+				scene = new THREE.Scene();
+
+				const ambientLight = new THREE.AmbientLight( 0xffffff, 0.6 );
+				ambientLight.layers.enableAll();
+				scene.add( ambientLight );
+
+				const directionalLight = new THREE.DirectionalLight( 0xffffff, 2.5 );
+				directionalLight.position.set( 2, 3, 4 );
+				directionalLight.layers.enableAll();
+				scene.add( directionalLight );
+
+				// First pass will render the knot, the portal frame, and the stencil mask of the portal
+
+				knot = new THREE.Mesh( new THREE.TorusKnotGeometry( 1.3, 0.4, 128, 16 ), new THREE.MeshNormalMaterial() );
+				knot.layers.set( FIRST_PASS );
+				scene.add( knot );
+
+				const portalPosition = new THREE.Vector3( - 3.2, 1.5, 0 );
+
+				const frame = new THREE.Mesh( new THREE.RingGeometry( 1, 1.15, 64 ), new THREE.MeshBasicMaterial() );
+				frame.position.copy( portalPosition );
+				frame.layers.set( FIRST_PASS );
+				scene.add( frame );
+
+				const mask = new THREE.Mesh( new THREE.CircleGeometry( 1, 64 ), new THREE.MeshBasicMaterial( {
+					colorWrite: false,
+					depthWrite: false,
+					stencilWrite: true,
+					stencilRef: 1,
+					stencilZPass: THREE.ReplaceStencilOp
+				} ) );
+				mask.position.copy( portalPosition );
+				mask.renderOrder = - 1; // the mask must come first when both passes are merged
+				mask.layers.set( FIRST_PASS );
+				scene.add( mask );
+
+				// second pass: spheres that orbit through the knot and the content of the portal,
+				// which is only drawn where the mask wrote the stencil buffer
+
+				spheres = new THREE.Group();
+				spheres.layers.set( SECOND_PASS );
+				scene.add( spheres );
+
+				const sphereGeometry = new THREE.SphereGeometry( 0.35, 32, 16 );
+				const sphereMaterial = new THREE.MeshStandardMaterial( { color: 0xff7a1a, roughness: 0.4 } );
+
+				for ( let i = 0; i < 8; i ++ ) {
+
+					const sphere = new THREE.Mesh( sphereGeometry, sphereMaterial );
+					sphere.layers.set( SECOND_PASS );
+					spheres.add( sphere );
+
+				}
+
+				const portalMaterial = new THREE.MeshBasicNodeMaterial( {
+					stencilWrite: true,
+					stencilRef: 1,
+					stencilFunc: THREE.EqualStencilFunc
+				} );
+				portalMaterial.colorNode = mix( color( 0x1d3fb8 ), color( 0xffd23f ), checker( uv().mul( 4 ) ) );
+
+				portal = new THREE.Mesh( new THREE.PlaneGeometry( 3, 3 ), portalMaterial );
+				portal.position.copy( portalPosition ).setZ( - 1 );
+				portal.layers.set( SECOND_PASS );
+				scene.add( portal );
+
+				//
+
+				renderer = new THREE.WebGPURenderer( { forceWebGL: params.forceWebGL } );
+				renderer.setPixelRatio( 1 );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				renderer.setClearColor( 0x16181d );
+				renderer.setAnimationLoop( animate );
+				renderer.inspector = new Inspector();
+				document.body.appendChild( renderer.domElement );
+
+				timer = new THREE.Timer();
+				timer.connect( document );
+
+				// the render target is shown with nearest filtering so the antialiased edges stay visible
+
+				displayQuad = new THREE.QuadMesh( new THREE.MeshBasicNodeMaterial() );
+				depthQuad = new THREE.QuadMesh( new THREE.MeshBasicNodeMaterial() );
+
+				createRenderTarget();
+
+				renderer.init().then( updateStatus );
+
+				initGUI();
+
+				window.addEventListener( 'resize', onWindowResize );
+
+			}
+
+			function initGUI() {
+
+				const gui = renderer.inspector.createParameters( 'Settings' );
+
+				gui.add( params, 'twoPasses' ).name( 'two passes' ).onChange( updateStatus );
+				gui.add( params, 'multisampling' ).onChange( invalidateRenderTarget );
+				gui.add( params, 'pixelSize', 1, 64 ).step( 1 ).name( 'pixel size' ).onChange( invalidateRenderTarget );
+				gui.add( params, 'forceWebGL' ).name( 'force WebGL' ).onChange( function ( value ) {
+
+					// the backend is chosen when the renderer is created
+
+					const url = new URL( window.location.href );
+
+					if ( value ) url.searchParams.set( 'webgl', '' );
+					else url.searchParams.delete( 'webgl' );
+
+					window.location.href = url.href;
+
+				} );
+
+				const flagsFolder = gui.addFolder( 'Render Target' );
+
+				for ( const flag of flags ) {
+
+					flagsFolder.add( params, flag ).onChange( invalidateRenderTarget ).listen();
+
+				}
+
+				const presetsFolder = gui.addFolder( 'Presets' );
+
+				presetsFolder.add( { 'all flags on': () => applyPreset( presets.default ) }, 'all flags on' );
+				presetsFolder.add( { 'post-processing': () => applyPreset( presets.postProcessing ) }, 'post-processing' );
+
+			}
+
+			function applyPreset( values ) {
+
+				flags.forEach( ( flag, i ) => params[ flag ] = values[ i ] );
+
+				invalidateRenderTarget();
+
+			}
+
+			// rebuild once per frame, a preset changes several flags at once
+
+			function invalidateRenderTarget() {
+
+				needsRenderTarget = true;
+
+			}
+
+			// the storage flags also select the usage of the multisampled textures when they are
+			// created (e.g. transient attachments), so the render target is recreated on every change
+
+			function createRenderTarget() {
+
+				if ( renderTarget !== undefined ) renderTarget.dispose();
+
+				const width = Math.max( 1, Math.round( window.innerWidth / params.pixelSize ) );
+				const height = Math.max( 1, Math.round( window.innerHeight / params.pixelSize ) );
+
+				const depthTexture = new THREE.DepthTexture( width, height );
+				depthTexture.format = THREE.DepthStencilFormat;
+				depthTexture.type = THREE.UnsignedInt248Type;
+
+				const options = {
+					samples: params.multisampling ? 4 : 1,
+					stencilBuffer: true,
+					depthTexture: depthTexture,
+					magFilter: THREE.NearestFilter,
+					minFilter: THREE.NearestFilter
+				};
+
+				for ( const flag of flags ) options[ flag ] = params[ flag ];
+
+				renderTarget = new THREE.RenderTarget( width, height, options );
+
+				displayQuad.material.colorNode = texture( renderTarget.texture ).rgb;
+				displayQuad.material.needsUpdate = true;
+
+				if ( isDepthReadable() ) {
+
+					const near = float( camera.near );
+					const far = float( camera.far );
+
+					const viewZ = perspectiveDepthToViewZ( texture( renderTarget.depthTexture ).r, near, far );
+
+					depthQuad.material.colorNode = vec3( viewZToOrthographicDepth( viewZ, near, far ).oneMinus() );
+					depthLabel.textContent = 'depth texture';
+
+				} else {
+
+					// hatched placeholder, the depth texture can't be sampled
+
+					const stripes = screenCoordinate.x.add( screenCoordinate.y ).div( 8 ).floor().mod( 2 );
+
+					depthQuad.material.colorNode = mix( color( 0x2a2a2a ), color( 0x5a2020 ), stripes );
+					depthLabel.textContent = 'depth texture: samples discarded';
+
+				}
+
+				depthQuad.material.needsUpdate = true;
+
+				updateStatus();
+
+			}
+
+			// WebGPU can't resolve depth, so the depth texture of a multisampled render target holds the
+			// samples themselves and is only readable when they are stored
+
+			function isDepthReadable() {
+
+				if ( params.multisampling === false || isWebGL() ) return true;
+
+				return params.storeMultisampledDepthBuffer;
+
+			}
+
+			function isWebGL() {
+
+				return renderer.backend.isWebGLBackend === true;
+
+			}
+
+			function updateStatus() {
+
+				if ( renderer._initialized !== true ) return;
+
+				const lines = [ `<span class="neutral">backend: ${ isWebGL() ? 'WebGL' : 'WebGPU' }, ${ params.twoPasses ? 'two passes' : 'one pass' }</span>` ];
+
+				if ( params.multisampling === false ) {
+
+					lines.push( '<span class="neutral">multisampling is off, the flags have no effect</span>' );
+
+				} else {
+
+					for ( const flag of flags ) {
+
+						const [ type, text ] = describeFlag( flag );
+
+						lines.push( `<span class="flag">${ flag }</span> = ${ params[ flag ] }: <span class="${ type }">${ text }</span>` );
+
+					}
+
+				}
+
+				statusElement.innerHTML = lines.join( '<br/>' );
+
+			}
+
+			function describeFlag( flag ) {
+
+				const value = params[ flag ];
+				const twoPasses = params.twoPasses;
+				const webgl = isWebGL();
+
+				// the WebGL backend only invalidates multisampled buffers in the Oculus Browser,
+				// and it invalidates the stencil buffer together with depth
+
+				if ( webgl && flag === 'storeMultisampledStencilBuffer' ) return [ 'neutral', 'no effect, the WebGL backend invalidates stencil with depth' ];
+				if ( webgl && flag.startsWith( 'store' ) ) return [ 'neutral', 'no effect, the WebGL backend only invalidates in the Oculus Browser' ];
+
+				switch ( flag ) {
+
+					case 'storeMultisampledColorBuffer':
+						if ( value ) return [ 'ok', twoPasses ? 'the knot and frame are kept for the second pass' : 'stored, but nothing reads the samples after the pass' ];
+						if ( twoPasses ) return [ 'bad', 'the second pass starts cleared, the knot and frame are gone' ];
+						return [ 'ok', 'no visible change, the store is skipped' ];
+
+					case 'storeMultisampledDepthBuffer':
+						if ( value ) return [ 'ok', twoPasses ? 'the knot occludes the spheres' : 'stored, the depth texture is readable' ];
+						if ( twoPasses ) return [ 'bad', 'the second pass starts with cleared depth, the spheres draw over the knot' ];
+						return [ 'bad', 'the image is unchanged but the depth texture can\'t be sampled' ];
+
+					case 'storeMultisampledStencilBuffer':
+						if ( value ) return [ 'ok', twoPasses ? 'the mask is kept, the portal shows its content' : 'stored, but nothing reads the samples after the pass' ];
+						if ( twoPasses ) return [ 'bad', 'the second pass starts with cleared stencil, the portal is empty' ];
+						return [ 'ok', 'no visible change, the store is skipped' ];
+
+					case 'resolveColorBuffer':
+						return value ? [ 'ok', 'the texture receives the antialiased image' ] : [ 'bad', 'the texture is never written, the screen stays black' ];
+
+					case 'resolveDepthBuffer':
+						if ( webgl === false ) return [ 'neutral', 'no effect, WebGPU has no depth resolve' ];
+						return value ? [ 'ok', 'the depth texture receives the resolved depth' ] : [ 'bad', 'the depth texture is never written' ];
+
+					case 'resolveStencilBuffer':
+						if ( webgl === false ) return [ 'neutral', 'no effect, WebGPU has no stencil resolve' ];
+						return [ 'neutral', 'no visible effect, the resolved stencil isn\'t read (and is only resolved with resolveDepthBuffer)' ];
+
+				}
+
+			}
+
+			function onWindowResize() {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+				invalidateRenderTarget();
+
+			}
+
+			function animate() {
+
+				timer.update();
+
+				if ( needsRenderTarget ) {
+
+					createRenderTarget();
+					needsRenderTarget = false;
+
+				}
+
+				const time = timer.getElapsed();
+
+				knot.rotation.set( time * 0.3, time * 0.4, 0 );
+				portal.rotation.z = time * 0.2;
+
+				for ( let i = 0; i < spheres.children.length; i ++ ) {
+
+					const angle = time * 0.8 + i * Math.PI * 2 / spheres.children.length;
+
+					spheres.children[ i ].position.set( Math.cos( angle ) * 1.6, Math.sin( angle * 2 ) * 0.6, Math.sin( angle ) * 1.6 );
+
+				}
+
+				// scene
+
+				renderer.setRenderTarget( renderTarget );
+
+				if ( params.twoPasses ) {
+
+					camera.layers.set( FIRST_PASS );
+					renderer.render( scene, camera );
+
+					// continue in the same render target without clearing it
+
+					camera.layers.set( SECOND_PASS );
+					renderer.autoClear = false;
+					renderer.render( scene, camera );
+					renderer.autoClear = true;
+
+				} else {
+
+					camera.layers.set( FIRST_PASS );
+					camera.layers.enable( SECOND_PASS );
+					renderer.render( scene, camera );
+
+				}
+
+				renderer.setRenderTarget( null );
+
+				// display, with the depth texture as an inset
+
+				const width = window.innerWidth;
+				const height = window.innerHeight;
+				const insetWidth = Math.round( width / 4 );
+				const insetHeight = Math.round( height / 4 );
+
+				renderer.setViewport( 0, 0, width, height );
+				displayQuad.render( renderer );
+
+				renderer.autoClear = false;
+				renderer.setViewport( width - insetWidth - 16, height - insetHeight - 16, insetWidth, insetHeight );
+				depthQuad.render( renderer );
+				renderer.setViewport( 0, 0, width, height );
+				renderer.autoClear = true;
+
+				depthLabel.style.bottom = ( insetHeight + 20 ) + 'px';
+
+			}
+
+		</script>
+
+	</body>
+</html>
