@@ -424,6 +424,7 @@
 		"webgpu_multiple_rendertargets",
 		"webgpu_multiple_rendertargets_readback",
 		"webgpu_multisampled_renderbuffers",
+		"webgpu_multisampled_store_resolve",
 		"webgpu_occlusion",
 		"webgpu_ocean",
 		"webgpu_oit",
