@@ -46,6 +46,8 @@ const _textureDescriptor = new GPUTextureDescriptor();
 const _viewDescriptor = new GPUTextureViewDescriptor();
 const _extent3D = new GPUExtent3D();
 
+const _maxOcclusionQueryCount = 4096; // the maximum size of a GPUQuerySet
+
 /**
  * A backend implementation targeting WebGPU.
  *
@@ -170,11 +172,15 @@ class WebGPUBackend extends Backend {
 		this.textureUtils = new WebGPUTextureUtils( this );
 
 		/**
-		 * A map that manages the resolve buffers for occlusion queries.
+		 * The buffer that occlusion query sets are resolved into. It is shared by all render
+		 * contexts and sized for the largest query count seen so far. Sharing is safe since the
+		 * buffer is never mapped: each resolve is immediately followed by a copy into a read
+		 * buffer of the render context, and later resolves are ordered after that copy.
 		 *
-		 * @type {Map<number,GPUBuffer>}
+		 * @type {?GPUBuffer}
+		 * @default null
 		 */
-		this.occludedResolveCache = new Map();
+		this.occlusionResolveBuffer = null;
 
 		// compatibility checks
 
@@ -874,8 +880,8 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
-	 * This method is executed at the beginning of a render call and prepares
-	 * the WebGPU state for upcoming render calls
+	 * This method is executed at the beginning of a render call. It creates the resources
+	 * and prepares the WebGPU state for upcoming render calls.
 	 *
 	 * @param {RenderContext} renderContext - The render context.
 	 */
@@ -892,30 +898,9 @@ class WebGPUBackend extends Backend {
 
 		if ( occlusionQueryCount > 0 ) {
 
-			if ( renderContextData.currentOcclusionQuerySet ) renderContextData.currentOcclusionQuerySet.destroy();
-			if ( renderContextData.currentOcclusionQueryBuffer ) renderContextData.currentOcclusionQueryBuffer.destroy();
+			this._prepareOcclusionQueries( renderContext, renderContextData );
 
-			// Get a reference to the array of objects with queries. The renderContextData property
-			// can be changed by another render pass before the buffer.mapAsyc() completes.
-			renderContextData.currentOcclusionQuerySet = renderContextData.occlusionQuerySet;
-			renderContextData.currentOcclusionQueryBuffer = renderContextData.occlusionQueryBuffer;
-			renderContextData.currentOcclusionQueryObjects = renderContextData.occlusionQueryObjects;
-
-			//
-
-			_querySetDescriptor.label = `occlusionQuerySet_${ renderContext.id }`;
-			_querySetDescriptor.type = 'occlusion';
-			_querySetDescriptor.count = occlusionQueryCount;
-
-			occlusionQuerySet = device.createQuerySet( _querySetDescriptor );
-
-			_querySetDescriptor.reset();
-
-			renderContextData.occlusionQuerySet = occlusionQuerySet;
-			renderContextData.occlusionQueryIndex = 0;
-			renderContextData.occlusionQueryObjects = new Array( occlusionQueryCount );
-
-			renderContextData.lastOcclusionObject = null;
+			occlusionQuerySet = renderContextData.occlusionQuerySet;
 
 		} else if ( renderContextData.lastOcclusionObject !== undefined ) {
 
@@ -923,8 +908,17 @@ class WebGPUBackend extends Backend {
 
 			renderContextData.lastOcclusionObject = undefined;
 
-			renderContextData.occlusionQuerySet.destroy();
-			renderContextData.occlusionQuerySet = undefined;
+			this._disposeOcclusionQueries( renderContextData );
+
+			// the results of the last pass with queries are not read anymore
+
+			if ( renderContextData.occlusionQueryBuffer !== undefined ) {
+
+				renderContextData.occlusionQueryBuffer.destroy();
+				renderContextData.occlusionQueryBuffer = undefined;
+				renderContextData.occlusionQueryObjects = undefined;
+
+			}
 
 		}
 
@@ -1423,7 +1417,7 @@ class WebGPUBackend extends Backend {
 
 		const lastOcclusionObject = renderContextData.lastOcclusionObject;
 
-		if ( lastOcclusionObject && lastOcclusionObject.occlusionTest === true ) {
+		if ( lastOcclusionObject && lastOcclusionObject.occlusionTest === true && renderContextData.occlusionQueryIndex < renderContextData.occlusionQueryCount ) {
 
 			renderContextData.currentPass.endOcclusionQuery();
 
@@ -1539,39 +1533,15 @@ class WebGPUBackend extends Backend {
 
 		if ( occlusionQueryCount > 0 ) {
 
-			const bufferSize = occlusionQueryCount * 8; // 8 byte entries for query results
+			// the query set, resolve buffer and read buffer were prepared in beginRender(). The query count
+			// of the render context data is clamped to the maximum size of a query set
 
-			//
-
-			let queryResolveBuffer = this.occludedResolveCache.get( bufferSize );
-
-			if ( queryResolveBuffer === undefined ) {
-
-				_bufferDescriptor.size = bufferSize;
-				_bufferDescriptor.usage = GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC;
-
-				queryResolveBuffer = this.device.createBuffer( _bufferDescriptor );
-
-				_bufferDescriptor.reset();
-
-				this.occludedResolveCache.set( bufferSize, queryResolveBuffer );
-
-			}
-
-			//
-
-			_bufferDescriptor.size = bufferSize;
-			_bufferDescriptor.usage = GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ;
-
-			const readBuffer = this.device.createBuffer( _bufferDescriptor );
-
-			_bufferDescriptor.reset();
+			const queryCount = renderContextData.occlusionQueryCount;
+			const bufferSize = queryCount * 8; // 8 byte entries for query results
 
 			// two buffers required here - WebGPU doesn't allow usage of QUERY_RESOLVE & MAP_READ to be combined
-			renderContextData.encoder.resolveQuerySet( renderContextData.occlusionQuerySet, 0, occlusionQueryCount, queryResolveBuffer, 0 );
-			renderContextData.encoder.copyBufferToBuffer( queryResolveBuffer, 0, readBuffer, 0, bufferSize );
-
-			renderContextData.occlusionQueryBuffer = readBuffer;
+			renderContextData.encoder.resolveQuerySet( renderContextData.occlusionQuerySet, 0, queryCount, this.occlusionResolveBuffer, 0 );
+			renderContextData.encoder.copyBufferToBuffer( this.occlusionResolveBuffer, 0, renderContextData.occlusionQueryBuffer, 0, bufferSize );
 
 			//
 
@@ -1660,11 +1630,165 @@ class WebGPUBackend extends Backend {
 
 			}
 
-			currentOcclusionQueryBuffer.destroy();
+			currentOcclusionQueryBuffer.unmap();
+
+			this._recycleOcclusionReadBuffer( renderContextData, currentOcclusionQueryBuffer );
 
 			renderContextData.occluded = occluded;
 
 		}
+
+	}
+
+	/**
+	 * Prepares the occlusion query resources of the given render context for its next render pass.
+	 * Resources are only recreated when the query count of the render context changes.
+	 *
+	 * @private
+	 * @param {RenderContext} renderContext - The render context.
+	 * @param {Object} renderContextData - The render context data.
+	 */
+	_prepareOcclusionQueries( renderContext, renderContextData ) {
+
+		const device = this.device;
+
+		let occlusionQueryCount = renderContext.occlusionQueryCount;
+
+		if ( occlusionQueryCount > _maxOcclusionQueryCount ) {
+
+			// a render pass can only use a single query set, so objects beyond the limit are not tested and remain visible
+
+			warnOnce( `WebGPUBackend: ${ occlusionQueryCount } occlusion queries exceed the maximum of ${ _maxOcclusionQueryCount } per render pass. Additional objects are not tested.` );
+
+			occlusionQueryCount = _maxOcclusionQueryCount;
+
+		}
+
+		const bufferSize = occlusionQueryCount * 8; // 8 byte entries for query results
+
+		// the query set is reused until the query count changes. The previous query set is only
+		// referenced by already submitted work so it can be destroyed
+
+		if ( renderContextData.occlusionQueryCount !== occlusionQueryCount ) {
+
+			this._disposeOcclusionQueries( renderContextData );
+
+			_querySetDescriptor.label = `occlusionQuerySet_${ renderContext.id }`;
+			_querySetDescriptor.type = 'occlusion';
+			_querySetDescriptor.count = occlusionQueryCount;
+
+			renderContextData.occlusionQuerySet = device.createQuerySet( _querySetDescriptor );
+			renderContextData.occlusionQueryCount = occlusionQueryCount;
+			renderContextData.occlusionReadBuffers = [];
+
+			_querySetDescriptor.reset();
+
+		}
+
+		// the resolve buffer is shared by all render contexts and only grows
+
+		if ( this.occlusionResolveBuffer === null || this.occlusionResolveBuffer.size < bufferSize ) {
+
+			if ( this.occlusionResolveBuffer !== null ) this.occlusionResolveBuffer.destroy();
+
+			_bufferDescriptor.label = 'occlusionResolveBuffer';
+			_bufferDescriptor.size = bufferSize;
+			_bufferDescriptor.usage = GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC;
+
+			this.occlusionResolveBuffer = device.createBuffer( _bufferDescriptor );
+
+			_bufferDescriptor.reset();
+
+		}
+
+		// hand the results of the previous render pass over to resolveOccludedAsync(). They are read one
+		// pass later because the read buffer of a pass can only be mapped once its commands were submitted.
+		// A previous handover that was never read back is only referenced by submitted work, so its
+		// buffer is recycled
+
+		if ( renderContextData.currentOcclusionQueryBuffer ) {
+
+			this._recycleOcclusionReadBuffer( renderContextData, renderContextData.currentOcclusionQueryBuffer );
+
+		}
+
+		renderContextData.currentOcclusionQueryBuffer = renderContextData.occlusionQueryBuffer;
+		renderContextData.currentOcclusionQueryObjects = renderContextData.occlusionQueryObjects;
+
+		// read buffers can't be shared: a buffer that is still mapping the results of an earlier pass
+		// can't be used in a submit, so a render context reuses its own buffers once they are unmapped.
+		// In the steady state two buffers alternate, one being written and one being read
+
+		let readBuffer = renderContextData.occlusionReadBuffers.pop();
+
+		if ( readBuffer === undefined ) {
+
+			_bufferDescriptor.label = `occlusionReadBuffer_${ renderContext.id }`;
+			_bufferDescriptor.size = bufferSize;
+			_bufferDescriptor.usage = GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ;
+
+			readBuffer = device.createBuffer( _bufferDescriptor );
+
+			_bufferDescriptor.reset();
+
+		}
+
+		renderContextData.occlusionQueryBuffer = readBuffer;
+		renderContextData.occlusionQueryIndex = 0;
+		renderContextData.occlusionQueryObjects = new Array( occlusionQueryCount );
+
+		renderContextData.lastOcclusionObject = null;
+
+	}
+
+	/**
+	 * Returns a read buffer to the pool of the given render context once its results were read,
+	 * or destroys it when the query count of the render context has changed in the meantime.
+	 *
+	 * @private
+	 * @param {Object} renderContextData - The render context data.
+	 * @param {GPUBuffer} readBuffer - The unmapped read buffer.
+	 */
+	_recycleOcclusionReadBuffer( renderContextData, readBuffer ) {
+
+		if ( renderContextData.occlusionQueryCount !== undefined && readBuffer.size === renderContextData.occlusionQueryCount * 8 ) {
+
+			renderContextData.occlusionReadBuffers.push( readBuffer );
+
+		} else {
+
+			readBuffer.destroy();
+
+		}
+
+	}
+
+	/**
+	 * Destroys the occlusion query set and the idle read buffers of the given render context.
+	 * Read buffers that are still mapping are destroyed by `_recycleOcclusionReadBuffer()`
+	 * once their results were read.
+	 *
+	 * @private
+	 * @param {Object} renderContextData - The render context data.
+	 */
+	_disposeOcclusionQueries( renderContextData ) {
+
+		if ( renderContextData.occlusionQuerySet !== undefined ) {
+
+			renderContextData.occlusionQuerySet.destroy();
+			renderContextData.occlusionQuerySet = undefined;
+
+		}
+
+		if ( renderContextData.occlusionReadBuffers !== undefined ) {
+
+			for ( const readBuffer of renderContextData.occlusionReadBuffers ) readBuffer.destroy();
+
+			renderContextData.occlusionReadBuffers = undefined;
+
+		}
+
+		renderContextData.occlusionQueryCount = undefined;
 
 	}
 
@@ -2353,14 +2477,18 @@ class WebGPUBackend extends Backend {
 					const lastObject = renderContextData.lastOcclusionObject;
 					if ( lastObject !== object ) {
 
-						if ( lastObject !== null && lastObject.occlusionTest === true ) {
+						// queries beyond the clamped query count are skipped, see _prepareOcclusionQueries()
+
+						const hasQuerySlot = renderContextData.occlusionQueryIndex < renderContextData.occlusionQueryCount;
+
+						if ( lastObject !== null && lastObject.occlusionTest === true && hasQuerySlot ) {
 
 							renderContextData.currentPass.endOcclusionQuery();
 							renderContextData.occlusionQueryIndex ++;
 
 						}
 
-						if ( object.occlusionTest === true ) {
+						if ( object.occlusionTest === true && renderContextData.occlusionQueryIndex < renderContextData.occlusionQueryCount ) {
 
 							renderContextData.currentPass.beginOcclusionQuery( renderContextData.occlusionQueryIndex );
 							renderContextData.occlusionQueryObjects[ renderContextData.occlusionQueryIndex ] = object;
@@ -2588,11 +2716,12 @@ class WebGPUBackend extends Backend {
 	 * @param {number} width - The width of the copy.
 	 * @param {number} height - The height of the copy.
 	 * @param {number} faceIndex - The cube face, depth slice or array layer index.
-	 * @return {Promise<TypedArray>} A Promise that resolves with a typed array when the copy operation has finished.
+	 * @param {?ReadbackBuffer} [target=null] - An optional readback buffer that receives the data.
+	 * @return {Promise<TypedArray|ReadbackBuffer>} A Promise that resolves with a typed array, or the given readback buffer, when the copy operation has finished.
 	 */
-	async copyTextureToBuffer( texture, x, y, width, height, faceIndex ) {
+	async copyTextureToBuffer( texture, x, y, width, height, faceIndex, target = null ) {
 
-		return this.textureUtils.copyTextureToBuffer( texture, x, y, width, height, faceIndex );
+		return this.textureUtils.copyTextureToBuffer( texture, x, y, width, height, faceIndex, target );
 
 	}
 
@@ -3284,15 +3413,10 @@ class WebGPUBackend extends Backend {
 		this.bindingUtils.dispose();
 		this.textureUtils.dispose();
 
-		if ( this.occludedResolveCache ) {
+		if ( this.occlusionResolveBuffer !== null ) {
 
-			for ( const buffer of this.occludedResolveCache.values() ) {
-
-				buffer.destroy();
-
-			}
-
-			this.occludedResolveCache.clear();
+			this.occlusionResolveBuffer.destroy();
+			this.occlusionResolveBuffer = null;
 
 		}
 
