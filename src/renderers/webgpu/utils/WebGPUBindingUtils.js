@@ -306,6 +306,10 @@ class WebGPUBindingUtils {
 
 		let bindingPoint = 0;
 
+		// the buffers and textures of the bind group, for hazard tracking
+
+		const resources = backend.trackHazards === true ? [] : null;
+
 		_bindGroupDescriptor.label = 'bindGroup_' + bindGroup.name;
 		_bindGroupDescriptor.layout = layoutGPU;
 
@@ -317,15 +321,21 @@ class WebGPUBindingUtils {
 
 				_bindGroupDescriptor.entries.push( { binding: bindingPoint, resource: { buffer: bindingData.buffer } } );
 
+				if ( resources !== null ) resources.push( bindingData.buffer );
+
 			} else if ( binding.isStorageBuffer ) {
 
 				const buffer = backend.get( binding.attribute ).buffer;
 
 				_bindGroupDescriptor.entries.push( { binding: bindingPoint, resource: { buffer: buffer } } );
 
+				if ( resources !== null ) resources.push( buffer );
+
 			} else if ( binding.isSampledTexture ) {
 
 				const textureData = backend.get( binding.texture );
+
+				if ( resources !== null && textureData.texture !== undefined ) resources.push( textureData.texture );
 
 				let resourceGPU;
 
@@ -405,6 +415,8 @@ class WebGPUBindingUtils {
 		const bindGroupGPU = device.createBindGroup( _bindGroupDescriptor );
 
 		_bindGroupDescriptor.reset();
+
+		if ( resources !== null ) backend.hazardTracker.setBindGroupResources( bindGroupGPU, resources );
 
 		return bindGroupGPU;
 

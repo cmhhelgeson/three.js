@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgpu - instancing - performance</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<meta property="og:title" content="three.js webgpu - instancing - performance">
+		<meta property="og:type" content="website">
+		<meta property="og:url" content="https://threejs.org/examples/webgpu_instancing_performance.html">
+		<meta property="og:image" content="https://threejs.org/examples/screenshots/webgpu_instancing_performance.jpg">
+		<link type="text/css" rel="stylesheet" href="example.css">
+	</head>
+	<body>
+
+		<div id="info">
+			<a href="https://threejs.org/" target="_blank" rel="noopener" class="logo-link"></a>
+
+			<div class="title-wrapper">
+				<a href="https://threejs.org/" target="_blank" rel="noopener">three.js</a><span>Instancing Performance</span>
+			</div>
+
+			<small id="stats"></small>
+		</div>
+
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../build/three.webgpu.js",
+					"three/webgpu": "../build/three.webgpu.js",
+					"three/tsl": "../build/three.tsl.js",
+					"three/addons/": "./jsm/"
+				}
+			}
+		</script>
+
+		<script type="module">
+
+			import * as THREE from 'three/webgpu';
+
+			import { Inspector } from 'three/addons/inspector/Inspector.js';
+
+			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+			import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
+
+			let camera, controls, scene, renderer, material, statsEl, updateFolder;
+			let instancedMesh = null;
+
+			const timer = new THREE.Timer();
+			timer.connect( document );
+
+			// gui
+
+			const Method = {
+				INSTANCED: 'INSTANCED',
+				MERGED: 'MERGED',
+				NAIVE: 'NAIVE'
+			};
+
+			// how the animated sub-range of instance matrices is marked for upload
+
+			const UpdateMode = {
+				'range per instance': 'PER_INSTANCE',
+				'one range': 'ONE_RANGE',
+				'whole buffer': 'WHOLE_BUFFER'
+			};
+
+			// merging or creating a mesh per instance does not scale to the instanced counts
+
+			const MAX_NON_INSTANCED = 10000;
+
+			const api = {
+				method: Method.INSTANCED,
+				count: 50000,
+				animate: true,
+				updateMode: 'PER_INSTANCE',
+				updateCount: 5000,
+				updateOffset: 0
+			};
+
+			// per instance transform, in the order of the instance matrices
+
+			const instances = [];
+
+			//
+
+			init();
+			initMesh();
+
+			//
+
+			function clean() {
+
+				const meshes = [];
+
+				scene.traverse( function ( object ) {
+
+					if ( object.isMesh ) meshes.push( object );
+
+				} );
+
+				for ( let i = 0; i < meshes.length; i ++ ) {
+
+					const mesh = meshes[ i ];
+					mesh.material.dispose();
+					mesh.geometry.dispose();
+
+					scene.remove( mesh );
+
+				}
+
+				instancedMesh = null;
+
+			}
+
+			function randomizeInstances( count ) {
+
+				instances.length = 0;
+
+				for ( let i = 0; i < count; i ++ ) {
+
+					const position = new THREE.Vector3(
+						Math.random() * 100 - 50,
+						Math.random() * 100 - 50,
+						Math.random() * 100 - 50
+					);
+
+					const quaternion = new THREE.Quaternion().random();
+
+					const scale = Math.random() * 1;
+
+					instances.push( { position, quaternion, scale } );
+
+				}
+
+			}
+
+			const composeMatrix = function () {
+
+				const scale = new THREE.Vector3();
+
+				return function ( matrix, instance, position = instance.position, quaternion = instance.quaternion ) {
+
+					scale.setScalar( instance.scale );
+
+					return matrix.compose( position, quaternion, scale );
+
+				};
+
+			}();
+
+			function initMesh() {
+
+				clean();
+
+				// make instances
+				new THREE.BufferGeometryLoader()
+					.setPath( 'models/json/' )
+					.load( 'suzanne_buffergeometry.json', function ( geometry ) {
+
+						material = new THREE.MeshNormalNodeMaterial();
+
+						geometry.computeVertexNormals();
+
+						randomizeInstances( api.method === Method.INSTANCED ? api.count : Math.min( api.count, MAX_NON_INSTANCED ) );
+
+						console.time( api.method + ' (build)' );
+
+						switch ( api.method ) {
+
+							case Method.INSTANCED:
+								makeInstanced( geometry );
+								break;
+
+							case Method.MERGED:
+								makeMerged( geometry );
+								break;
+
+							case Method.NAIVE:
+								makeNaive( geometry );
+								break;
+
+						}
+
+						console.timeEnd( api.method + ' (build)' );
+
+						if ( api.method === Method.INSTANCED ) updateFolder.show(); else updateFolder.hide();
+
+						updateStats();
+
+					} );
+
+			}
+
+			function makeInstanced( geometry ) {
+
+				const matrix = new THREE.Matrix4();
+				const mesh = new THREE.InstancedMesh( geometry, material, instances.length );
+				mesh.instanceMatrix.setUsage( THREE.DynamicDrawUsage );
+
+				for ( let i = 0; i < instances.length; i ++ ) {
+
+					mesh.setMatrixAt( i, composeMatrix( matrix, instances[ i ] ) );
+
+				}
+
+				scene.add( mesh );
+
+				instancedMesh = mesh;
+
+			}
+
+			function makeMerged( geometry ) {
+
+				const geometries = [];
+				const matrix = new THREE.Matrix4();
+
+				for ( let i = 0; i < instances.length; i ++ ) {
+
+					const instanceGeometry = geometry.clone();
+					instanceGeometry.applyMatrix4( composeMatrix( matrix, instances[ i ] ) );
+
+					geometries.push( instanceGeometry );
+
+				}
+
+				const mergedGeometry = BufferGeometryUtils.mergeGeometries( geometries );
+
+				scene.add( new THREE.Mesh( mergedGeometry, material ) );
+
+			}
+
+			function makeNaive( geometry ) {
+
+				const matrix = new THREE.Matrix4();
+
+				for ( let i = 0; i < instances.length; i ++ ) {
+
+					const mesh = new THREE.Mesh( geometry, material );
+					mesh.applyMatrix4( composeMatrix( matrix, instances[ i ] ) );
+
+					scene.add( mesh );
+
+				}
+
+			}
+
+			// the animated sub-range of instances, clamped to the instance count
+
+			function getUpdateRange() {
+
+				const start = Math.min( api.updateOffset, instances.length );
+				const count = Math.min( api.updateCount, instances.length - start );
+
+				return { start, count };
+
+			}
+
+			function updateStats() {
+
+				const geometry = scene.children.find( ( object ) => object.isMesh )?.geometry;
+
+				if ( geometry === undefined ) return;
+
+				const geometryByteLength = getGeometryByteLength( geometry );
+
+				const lines = [];
+
+				if ( api.method === Method.INSTANCED ) {
+
+					const { count } = getUpdateRange();
+
+					const ranges = ! api.animate || count === 0 ? 0 : ( api.updateMode === 'PER_INSTANCE' ? count : ( api.updateMode === 'ONE_RANGE' ? 1 : 0 ) );
+					const bytes = ! api.animate || count === 0 ? 0 : ( api.updateMode === 'WHOLE_BUFFER' ? instances.length * 64 : count * 64 );
+
+					lines.push( 'GPU draw calls: 1' );
+					lines.push( 'GPU memory: ' + formatBytes( instances.length * 64 + geometryByteLength, 2 ) );
+					lines.push( 'Animated instances: ' + ( api.animate ? count : 0 ) );
+					lines.push( 'Update ranges per frame: ' + ( api.updateMode === 'WHOLE_BUFFER' && api.animate && count > 0 ? 'none ( whole buffer )' : ranges ) );
+					lines.push( 'Bytes uploaded per frame: ' + formatBytes( bytes, 2 ) );
+
+				} else if ( api.method === Method.MERGED ) {
+
+					lines.push( 'GPU draw calls: 1' );
+					lines.push( 'GPU memory: ' + formatBytes( geometryByteLength, 2 ) );
+
+				} else {
+
+					lines.push( 'GPU draw calls: ' + instances.length );
+					lines.push( 'GPU memory: ' + formatBytes( instances.length * 64 + geometryByteLength, 2 ) );
+
+				}
+
+				if ( instances.length < api.count ) lines.push( 'Limited to ' + MAX_NON_INSTANCED + ' meshes with this method' );
+
+				statsEl.innerHTML = lines.join( '<br/>' );
+
+			}
+
+			function init() {
+
+				const width = window.innerWidth;
+				const height = window.innerHeight;
+
+				// camera
+
+				camera = new THREE.PerspectiveCamera( 70, width / height, 1, 300 );
+				camera.position.z = 140;
+
+				// renderer
+
+				renderer = new THREE.WebGPURenderer( { antialias: true } );
+				renderer.setPixelRatio( window.devicePixelRatio );
+				renderer.setSize( width, height );
+				renderer.setAnimationLoop( animate );
+				renderer.inspector = new Inspector();
+				document.body.appendChild( renderer.domElement );
+
+				// scene
+
+				scene = new THREE.Scene();
+				scene.background = new THREE.Color( 0x111111 );
+
+				// controls
+
+				controls = new OrbitControls( camera, renderer.domElement );
+				controls.autoRotate = true;
+
+				// stats
+
+				statsEl = document.getElementById( 'stats' );
+
+				// gui
+
+				const gui = renderer.inspector.createParameters( 'Settings' );
+				gui.add( api, 'method', Method ).onChange( initMesh );
+				gui.add( api, 'count', 1, 100000, 1 ).onChange( initMesh );
+
+				updateFolder = gui.addFolder( 'Instance Updates' );
+				updateFolder.add( api, 'animate' ).onChange( updateStats );
+				updateFolder.add( api, 'updateMode', UpdateMode ).name( 'mode' ).onChange( updateStats );
+				updateFolder.add( api, 'updateCount', 0, 100000, 1 ).name( 'instances' ).onChange( updateStats );
+				updateFolder.add( api, 'updateOffset', 0, 100000, 1 ).name( 'first instance' ).onChange( updateStats );
+
+				// listeners
+
+				window.addEventListener( 'resize', onWindowResize );
+
+				Object.assign( window, { scene } );
+
+			}
+
+			// Animates the sub-range of instances and marks their matrices for upload. 'range per instance' adds one
+			// update range per instance, as code that updates instances one by one does; 'one range' covers the
+			// sub-range with a single update range; 'whole buffer' uploads all matrices.
+
+			const animateInstances = function () {
+
+				const matrix = new THREE.Matrix4();
+				const position = new THREE.Vector3();
+				const quaternion = new THREE.Quaternion();
+				const spin = new THREE.Quaternion();
+				const axis = new THREE.Vector3( 0, 1, 0 );
+
+				return function ( time ) {
+
+					const { start, count } = getUpdateRange();
+
+					if ( count === 0 ) return;
+
+					const instanceMatrix = instancedMesh.instanceMatrix;
+
+					for ( let i = start; i < start + count; i ++ ) {
+
+						const instance = instances[ i ];
+
+						position.copy( instance.position );
+						position.y += Math.sin( time * 2 + i * 0.1 ) * 0.5;
+
+						spin.setFromAxisAngle( axis, time * 2 + i );
+						quaternion.multiplyQuaternions( spin, instance.quaternion );
+
+						instancedMesh.setMatrixAt( i, composeMatrix( matrix, instance, position, quaternion ) );
+
+						if ( api.updateMode === 'PER_INSTANCE' ) instanceMatrix.addUpdateRange( i * 16, 16 );
+
+					}
+
+					if ( api.updateMode === 'ONE_RANGE' ) instanceMatrix.addUpdateRange( start * 16, count * 16 );
+
+					instanceMatrix.needsUpdate = true;
+
+				};
+
+			}();
+
+			//
+
+			function onWindowResize() {
+
+				const width = window.innerWidth;
+				const height = window.innerHeight;
+
+				camera.aspect = width / height;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( width, height );
+
+			}
+
+			function animate() {
+
+				timer.update();
+
+				if ( instancedMesh !== null && api.animate ) animateInstances( timer.getElapsed() );
+
+				controls.update();
+
+				renderer.render( scene, camera );
+
+			}
+
+			//
+
+			function getGeometryByteLength( geometry ) {
+
+				let total = 0;
+
+				if ( geometry.index ) total += geometry.index.array.byteLength;
+
+				for ( const name in geometry.attributes ) {
+
+					total += geometry.attributes[ name ].array.byteLength;
+
+				}
+
+				return total;
+
+			}
+
+			// Source: https://stackoverflow.com/a/18650828/1314762
+			function formatBytes( bytes, decimals ) {
+
+				if ( bytes === 0 ) return '0 bytes';
+
+				const k = 1024;
+				const dm = decimals < 0 ? 0 : decimals;
+				const sizes = [ 'bytes', 'KB', 'MB' ];
+
+				const i = Math.floor( Math.log( bytes ) / Math.log( k ) );
+
+				return parseFloat( ( bytes / Math.pow( k, i ) ).toFixed( dm ) ) + ' ' + sizes[ i ];
+
+			}
+
+		</script>
+
+	</body>
+</html>

@@ -73,6 +73,40 @@ function writeBufferAligned( device, buffer, array, start, count ) {
 }
 
 /**
+ * Writes a range of a typed array, or of an array buffer, into the given GPU buffer.
+ *
+ * @private
+ * @function
+ * @param {GPUDevice} device - The GPU device calling `writeBuffer()`.
+ * @param {GPUBuffer} buffer - The GPU buffer.
+ * @param {TypedArray|ArrayBuffer} array - The source data.
+ * @param {number} dataOffset - The offset into the source data, in elements for typed arrays and in bytes otherwise.
+ * @param {number} size - The size of the range, in the same unit as `dataOffset`.
+ * @param {boolean} needsAlignment - Whether the elements are smaller than 4 bytes, see {@link writeBufferAligned}.
+ */
+function writeRange( device, buffer, array, dataOffset, size, needsAlignment ) {
+
+	if ( needsAlignment ) {
+
+		writeBufferAligned( device, buffer, array, dataOffset, size );
+
+	} else {
+
+		const bufferOffset = dataOffset * ( isTypedArray( array ) ? array.BYTES_PER_ELEMENT : 1 ); // bufferOffset is always in bytes
+
+		device.queue.writeBuffer( buffer, bufferOffset, array, dataOffset, size );
+
+	}
+
+}
+
+function sortUpdateRanges( a, b ) {
+
+	return a.start - b.start;
+
+}
+
+/**
  * A WebGPU backend utility module for managing shader attributes.
  *
  * @private
@@ -292,6 +326,14 @@ class WebGPUAttributeUtils {
 			const isTyped = isTypedArray( array );
 			const byteOffsetFactor = isTyped ? 1 : array.BYTES_PER_ELEMENT;
 
+			// Sort the ranges and write overlapping or adjacent ranges with a single writeBuffer() call.
+			// The ranges are cleared afterwards, so they can be sorted in place.
+
+			updateRanges.sort( sortUpdateRanges );
+
+			let writeStart = - 1;
+			let writeEnd = - 1;
+
 			for ( let i = 0, l = updateRanges.length; i < l; i ++ ) {
 
 				const range = updateRanges[ i ];
@@ -311,19 +353,22 @@ class WebGPUAttributeUtils {
 
 				}
 
-				if ( needsAlignment ) {
+				if ( dataOffset <= writeEnd ) {
 
-					writeBufferAligned( device, buffer, array, dataOffset, size );
+					writeEnd = Math.max( writeEnd, dataOffset + size );
 
 				} else {
 
-					const bufferOffset = dataOffset * ( isTyped ? array.BYTES_PER_ELEMENT : 1 ); // bufferOffset is always in bytes
+					if ( writeEnd !== - 1 ) writeRange( device, buffer, array, writeStart, writeEnd - writeStart, needsAlignment );
 
-					device.queue.writeBuffer( buffer, bufferOffset, array, dataOffset, size );
+					writeStart = dataOffset;
+					writeEnd = dataOffset + size;
 
 				}
 
 			}
+
+			writeRange( device, buffer, array, writeStart, writeEnd - writeStart, needsAlignment );
 
 			bufferAttribute.clearUpdateRanges();
 

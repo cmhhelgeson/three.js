@@ -3,6 +3,7 @@ import RenderObjects from './RenderObjects.js';
 import Attributes from './Attributes.js';
 import Geometries from './Geometries.js';
 import Info from './Info.js';
+import WebGPUInfo from '../webgpu/utils/WebGPUInfo.js';
 import Pipelines from './Pipelines.js';
 import Bindings from './Bindings.js';
 import RenderLists from './RenderLists.js';
@@ -313,7 +314,7 @@ class Renderer {
 		 *
 		 * @type {Info}
 		 */
-		this.info = new Info();
+		this.info = backend.isWebGPUBackend ? new WebGPUInfo() : new Info();
 
 		/**
 		 * A global context node that stores override nodes for specific transformations or calculations.

@@ -16,6 +16,7 @@ import WebGPUTextureUtils from './utils/WebGPUTextureUtils.js';
 import { WebGPUCoordinateSystem, TimestampQuery, REVISION, HalfFloatType, Compatibility, CustomBlending } from '../../constants.js';
 import { Color } from '../../math/Color.js';
 import WebGPUTimestampQueryPool from './utils/WebGPUTimestampQueryPool.js';
+import WebGPUHazardTracker from './utils/WebGPUHazardTracker.js';
 import { error, warnOnce } from '../../utils.js';
 
 import GPUBufferDescriptor from './descriptors/GPUBufferDescriptor.js';
@@ -67,6 +68,7 @@ class WebGPUBackend extends Backend {
 	 * @property {number} [samples=0] - When `antialias` is `true`, `4` samples are used by default. Set this parameter to any other integer value than 0 to overwrite the default.
 	 * @property {boolean} [forceWebGL=false] - If set to `true`, the renderer uses a WebGL 2 backend no matter if WebGPU is supported or not.
 	 * @property {boolean} [trackTimestamp=false] - Whether to track timestamps with a Timestamp Query API or not.
+	 * @property {boolean} [trackHazards=false] - Whether to report in `renderer.info.backend` the write hazards that submitting the commands of a task in one batch would run into. See {@link WebGPUHazardTracker}.
 	 * @property {string} [powerPreference=undefined] - The power preference.
 	 * @property {Object} [requiredLimits=undefined] - Specifies the limits that are required by the device request. The request will fail if the adapter cannot provide these limits.
 	 * @property {GPUDevice} [device=undefined] - If there is an existing GPU device on app level, it can be passed to the renderer as a parameter.
@@ -168,6 +170,22 @@ class WebGPUBackend extends Backend {
 		 * @type {WebGPUTextureUtils}
 		 */
 		this.textureUtils = new WebGPUTextureUtils( this );
+
+		/**
+		 * Whether to report the write hazards that submitting the commands of a task in one batch would run into.
+		 * Must be set before rendering.
+		 *
+		 * @type {boolean}
+		 * @default false
+		 */
+		this.trackHazards = ( parameters.trackHazards === true );
+
+		/**
+		 * Tracks the write hazards of batched submits when `trackHazards` is enabled.
+		 *
+		 * @type {WebGPUHazardTracker}
+		 */
+		this.hazardTracker = new WebGPUHazardTracker( this );
 
 		/**
 		 * A map that manages the resolve buffers for occlusion queries.
@@ -411,6 +429,8 @@ class WebGPUBackend extends Backend {
 	 * @return {Promise<ArrayBuffer|ReadbackBuffer>} A promise that resolves with the buffer data when the data are ready.
 	 */
 	async getArrayBufferAsync( attribute, target = null, offset = 0, count = - 1 ) {
+
+		if ( this.trackHazards === true ) this.hazardTracker.closeBatch();
 
 		return await this.attributeUtils.getArrayBufferAsync( attribute, target, offset, count );
 
@@ -1082,6 +1102,8 @@ class WebGPUBackend extends Backend {
 		const encoder = device.createCommandEncoder( _commandEncoderDescriptor );
 		_commandEncoderDescriptor.reset();
 
+		if ( this.trackHazards === true ) this.hazardTracker.encode();
+
 		// Layered render targets: prepare bundle encoders for each camera in the array camera.
 
 		if ( this._isRenderCameraDepthArray( renderContext ) === true ) {
@@ -1212,7 +1234,11 @@ class WebGPUBackend extends Backend {
 
 		for ( const bundleEncoder of renderContextData.bundleEncoders ) {
 
-			bundles.push( bundleEncoder.finish() );
+			const bundle = bundleEncoder.finish();
+
+			if ( this.trackHazards === true ) this.hazardTracker.finishBundle( bundleEncoder, bundle );
+
+			bundles.push( bundle );
 
 		}
 
@@ -1421,6 +1447,8 @@ class WebGPUBackend extends Backend {
 
 			renderContextData.currentPass.executeBundles( renderContextData.renderBundles );
 
+			if ( this.trackHazards === true ) this.hazardTracker.executeBundles( renderContextData.renderBundles );
+
 		}
 
 		const lastOcclusionObject = occlusionData.lastOcclusionObject;
@@ -1497,6 +1525,8 @@ class WebGPUBackend extends Backend {
 					}
 
 					renderPass.executeBundles( [ bundle ] );
+
+					if ( this.trackHazards === true ) this.hazardTracker.executeBundles( [ bundle ] );
 
 					renderPass.end();
 
@@ -1648,6 +1678,8 @@ class WebGPUBackend extends Backend {
 
 			occlusionData.currentOcclusionQueryObjects = null;
 			occlusionData.currentOcclusionQueryBuffer = null;
+
+			if ( this.trackHazards === true ) this.hazardTracker.closeBatch();
 
 			await currentOcclusionQueryBuffer.mapAsync( GPUMapMode.READ );
 
@@ -1856,6 +1888,8 @@ class WebGPUBackend extends Backend {
 		const encoder = device.createCommandEncoder( _commandEncoderDescriptor );
 		_commandEncoderDescriptor.reset();
 
+		if ( this.trackHazards === true ) this.hazardTracker.encode();
+
 		const currentPass = encoder.beginRenderPass( {
 			colorAttachments,
 			depthStencilAttachment
@@ -1894,6 +1928,8 @@ class WebGPUBackend extends Backend {
 
 		_commandEncoderDescriptor.reset();
 		_computePassDescriptor.reset();
+
+		if ( this.trackHazards === true ) this.hazardTracker.encode();
 
 	}
 
@@ -1935,6 +1971,8 @@ class WebGPUBackend extends Backend {
 
 			passEncoderGPU.setBindGroup( i, bindingsData.group );
 
+			if ( this.trackHazards === true ) this.hazardTracker.useBindGroup( bindingsData.group, passEncoderGPU );
+
 		}
 
 		if ( dispatchSize === null ) {
@@ -1948,6 +1986,8 @@ class WebGPUBackend extends Backend {
 		if ( dispatchSize && dispatchSize.isIndirectStorageBufferAttribute ) {
 
 			const dispatchBuffer = this.get( dispatchSize ).buffer;
+
+			if ( this.trackHazards === true ) this.hazardTracker.use( dispatchBuffer, passEncoderGPU );
 
 			passEncoderGPU.dispatchWorkgroupsIndirect( dispatchBuffer, 0 );
 
@@ -2021,6 +2061,41 @@ class WebGPUBackend extends Backend {
 		groupData.passEncoderGPU.end();
 
 		submit( this.device, groupData.cmdEncoderGPU.finish() );
+
+	}
+
+	/**
+	 * Marks every buffer and texture a draw uses for hazard tracking, including the ones that are still bound
+	 * from earlier draws of the pass.
+	 *
+	 * @private
+	 * @param {RenderObject} renderObject - The render object.
+	 * @param {Array<BindGroup>} bindings - The bind groups.
+	 * @param {?BufferAttribute} index - The index attribute.
+	 * @param {Array<BufferAttribute>} vertexBuffers - The vertex buffers.
+	 * @param {GPURenderPassEncoder|GPURenderBundleEncoder} passEncoderGPU - The GPU pass encoder recording the draw.
+	 */
+	_useDrawResources( renderObject, bindings, index, vertexBuffers, passEncoderGPU ) {
+
+		const hazardTracker = this.hazardTracker;
+
+		for ( let i = 0, l = bindings.length; i < l; i ++ ) {
+
+			hazardTracker.useBindGroup( this.get( bindings[ i ] ).group, passEncoderGPU );
+
+		}
+
+		if ( index !== null ) hazardTracker.use( this.get( index ).buffer, passEncoderGPU );
+
+		for ( let i = 0, l = vertexBuffers.length; i < l; i ++ ) {
+
+			hazardTracker.use( this.get( vertexBuffers[ i ] ).buffer, passEncoderGPU );
+
+		}
+
+		const indirect = renderObject.getIndirect();
+
+		if ( indirect !== null ) hazardTracker.use( this.get( indirect ).buffer, passEncoderGPU );
 
 	}
 
@@ -2112,6 +2187,9 @@ class WebGPUBackend extends Backend {
 			}
 
 		}
+
+		if ( this.trackHazards === true ) this._useDrawResources( renderObject, bindings, index, vertexBuffers, passEncoderGPU );
+
 		// stencil
 
 		if ( context.stencil === true && material.stencilWrite === true && renderContextData.currentStencilRef !== material.stencilRef ) {
@@ -2561,6 +2639,14 @@ class WebGPUBackend extends Backend {
 	 */
 	updateTexture( texture, options ) {
 
+		if ( this.trackHazards === true ) {
+
+			const textureGPU = this.get( texture ).texture;
+
+			if ( textureGPU !== undefined ) this.hazardTracker.write( textureGPU, 'texture' );
+
+		}
+
 		this.textureUtils.updateTexture( texture, options );
 
 	}
@@ -2584,6 +2670,14 @@ class WebGPUBackend extends Backend {
 	 */
 	destroyTexture( texture, isDefaultTexture = false ) {
 
+		if ( this.trackHazards === true && isDefaultTexture === false ) {
+
+			const textureGPU = this.get( texture ).texture;
+
+			if ( textureGPU !== undefined ) this.hazardTracker.destroy( textureGPU );
+
+		}
+
 		this.textureUtils.destroyTexture( texture, isDefaultTexture );
 
 	}
@@ -2602,7 +2696,24 @@ class WebGPUBackend extends Backend {
 	 */
 	async copyTextureToBuffer( texture, x, y, width, height, faceIndex ) {
 
+		if ( this.trackHazards === true ) this.hazardTracker.closeBatch();
+
 		return this.textureUtils.copyTextureToBuffer( texture, x, y, width, height, faceIndex );
+
+	}
+
+	/**
+	 * Resolves the time stamp for the given render context and type.
+	 *
+	 * @async
+	 * @param {string} [type='render'] - The type of the time stamp.
+	 * @return {Promise<number>} A Promise that resolves with the time stamp.
+	 */
+	async resolveTimestampsAsync( type = 'render' ) {
+
+		if ( this.trackHazards === true ) this.hazardTracker.closeBatch();
+
+		return super.resolveTimestampsAsync( type );
 
 	}
 
@@ -2748,6 +2859,8 @@ class WebGPUBackend extends Backend {
 		const bundleEncoder = renderContextData.currentPass;
 		const bundleGPU = bundleEncoder.finish();
 
+		if ( this.trackHazards === true ) this.hazardTracker.finishBundle( bundleEncoder, bundleGPU );
+
 		this.get( bundle ).bundleGPU = bundleGPU;
 
 		// restore render pass state
@@ -2835,6 +2948,8 @@ class WebGPUBackend extends Backend {
 
 		const uniformBufferData = this.get( uniformBuffer );
 
+		if ( this.trackHazards === true ) this.hazardTracker.destroy( uniformBufferData.buffer );
+
 		uniformBufferData.buffer.destroy();
 
 		this.delete( uniformBuffer );
@@ -2875,6 +2990,8 @@ class WebGPUBackend extends Backend {
 	 *  @param {Buffer} binding - The buffer binding to update.
 	 */
 	updateBinding( binding ) {
+
+		if ( this.trackHazards === true ) this.hazardTracker.write( this.get( binding ).buffer, 'uniform' );
 
 		this.bindingUtils.updateBinding( binding );
 
@@ -2952,6 +3069,19 @@ class WebGPUBackend extends Backend {
 	 */
 	updateAttribute( attribute ) {
 
+		if ( this.trackHazards === true ) {
+
+			const bufferAttribute = this.getBufferAttribute( attribute );
+
+			let type = 'attribute';
+
+			if ( bufferAttribute.isIndirectStorageBufferAttribute ) type = 'indirect';
+			else if ( bufferAttribute.isStorageBufferAttribute || bufferAttribute.isStorageInstancedBufferAttribute ) type = 'storage';
+
+			this.hazardTracker.write( this.get( bufferAttribute ).buffer, type );
+
+		}
+
 		this.attributeUtils.updateAttribute( attribute );
 
 	}
@@ -2962,6 +3092,14 @@ class WebGPUBackend extends Backend {
 	 * @param {BufferAttribute} attribute - The buffer attribute to destroy.
 	 */
 	destroyAttribute( attribute ) {
+
+		if ( this.trackHazards === true ) {
+
+			const buffer = this.get( this.getBufferAttribute( attribute ) ).buffer;
+
+			if ( buffer !== undefined ) this.hazardTracker.destroy( buffer );
+
+		}
 
 		this.attributeUtils.destroyAttribute( attribute );
 
@@ -3072,6 +3210,13 @@ class WebGPUBackend extends Backend {
 
 		const sourceGPU = this.get( srcTexture ).texture;
 		const destinationGPU = this.get( dstTexture ).texture;
+
+		if ( this.trackHazards === true ) {
+
+			this.hazardTracker.use( sourceGPU, encoder );
+			this.hazardTracker.use( destinationGPU, encoder );
+
+		}
 
 		_texelCopyTextureInfoSrc.texture = sourceGPU;
 		_texelCopyTextureInfoSrc.mipLevel = srcLevel;
@@ -3196,6 +3341,8 @@ class WebGPUBackend extends Backend {
 			_commandEncoderDescriptor.label = 'copyFramebufferToTexture_' + texture.id;
 			encoder = this.device.createCommandEncoder( _commandEncoderDescriptor );
 			_commandEncoderDescriptor.reset();
+
+			if ( this.trackHazards === true ) this.hazardTracker.encode();
 
 		}
 
