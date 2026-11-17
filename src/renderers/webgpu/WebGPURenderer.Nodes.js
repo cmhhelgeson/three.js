@@ -1,7 +1,8 @@
 import Renderer from '../common/Renderer.js';
-import WebGLBackend from '../webgl-fallback/WebGLBackend.js';
+import Backend from '../common/Backend.js';
 import WebGPUBackend from './WebGPUBackend.js';
 import BasicNodeLibrary from './nodes/BasicNodeLibrary.js';
+import { loadWebGLBackend } from '../webgl-fallback/loadWebGLBackend.js';
 import { warn } from '../../utils.js';
 
 /**
@@ -20,29 +21,28 @@ class WebGPURenderer extends Renderer {
 	 */
 	constructor( parameters = {} ) {
 
-		let BackendClass;
+		// the WebGL 2 backend is imported on demand, so builds which only run WebGPU don't load it.
+		// when it is forced, a generic backend stands in until init() replaces it
+
+		const backend = parameters.forceWebGL ? new Backend( parameters ) : new WebGPUBackend( parameters );
+
+		super( backend, parameters );
 
 		if ( parameters.forceWebGL ) {
 
-			BackendClass = WebGLBackend;
+			this._getBackend = () => this._createWebGLBackend();
 
 		} else {
 
-			BackendClass = WebGPUBackend;
-
-			parameters.getFallback = () => {
+			this._getFallback = () => {
 
 				warn( 'WebGPURenderer: WebGPU is not available, running under WebGL2 backend.' );
 
-				return new WebGLBackend( parameters );
+				return this._createWebGLBackend();
 
 			};
 
 		}
-
-		const backend = new BackendClass( parameters );
-
-		super( backend, parameters );
 
 		/**
 		 * The generic default value is overwritten with the
@@ -61,6 +61,21 @@ class WebGPURenderer extends Renderer {
 		 * @default true
 		 */
 		this.isWebGPURenderer = true;
+
+	}
+
+	/**
+	 * Creates the WebGL 2 backend. Its module is imported on first use, so it's only
+	 * downloaded when WebGL 2 is forced or WebGPU is not available.
+	 *
+	 * @private
+	 * @return {Promise<Backend>} A Promise that resolves with the WebGL 2 backend.
+	 */
+	async _createWebGLBackend() {
+
+		const { WebGLBackend } = await loadWebGLBackend();
+
+		return new WebGLBackend( this.backend.parameters );
 
 	}
 

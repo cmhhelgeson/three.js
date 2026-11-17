@@ -10,6 +10,8 @@ const contents = {
     'three.tsl.js': `export * from '../src/Three.TSL.js';`,
     'three.webgpu.js': `export * from '../src/Three.WebGPU.js';`,
     'three.webgpu.nodes.js': `export * from '../src/Three.WebGPU.Nodes.js';`,
+    'three.webgpu.webgl.js': `export * from '../src/Three.WebGPU.WebGL.js';`,
+    'three.webgpu.nodes.webgl.js': `export * from '../src/Three.WebGPU.WebGL.js';`,
 }
 
 await Promise.all( Object.entries( contents ).map( ( [ filename, content ] ) => 

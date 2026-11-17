@@ -22,11 +22,15 @@ import {
 	NodeFrame,
 	Lighting,
 	InspectorBase,
-	GLSLNodeBuilder,
 	BasicNodeLibrary,
-	WebGLCapabilities,
 	PMREMNode,
+	loadWebGLBackend,
 } from 'three/webgpu';
+
+// GLSLNodeBuilder and WebGLCapabilities live in the WebGL 2 backend module of WebGPURenderer,
+// which is not part of the main WebGPU build and is loaded on demand
+
+const { GLSLNodeBuilder, WebGLCapabilities } = await loadWebGLBackend();
 
 // Limitations
 // - VSM shadows not supported

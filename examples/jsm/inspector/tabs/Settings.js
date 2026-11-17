@@ -1,5 +1,5 @@
 import { Parameters } from './Parameters.js';
-import { WebGPURenderer, WebGLBackend, Node } from 'three/webgpu';
+import { WebGPURenderer, Node } from 'three/webgpu';
 import { getItem, setItem } from '../Storage.js';
 
 const _extensions = [
@@ -21,11 +21,11 @@ function forceWebGL( enable ) {
 
 		WebGPURenderer.prototype.init = async function () {
 
-			if ( this.backend.isWebGLBackend !== true ) {
+			if ( this._initPromise === null && this.backend.isWebGLBackend !== true ) {
 
-				const parameters = this.backend.parameters;
+				// the WebGL 2 backend is loaded on demand when the renderer initializes
 
-				this.backend = new WebGLBackend( parameters );
+				this._getBackend = () => this._createWebGLBackend();
 
 			}
 

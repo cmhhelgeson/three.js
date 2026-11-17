@@ -59,6 +59,29 @@ function header() {
 
 }
 
+// WebGPURenderer imports its WebGL 2 backend on demand. This emits the backend as its own
+// file, with a fixed name and all its exports, which is loaded after the given WebGPU build
+
+function webglBackend( fileName, webgpuInput ) {
+
+	return {
+
+		buildStart() {
+
+			this.emitFile( {
+				type: 'chunk',
+				id: 'src/Three.WebGPU.WebGL.js',
+				fileName,
+				preserveSignature: 'strict',
+				implicitlyLoadedAfterOneOf: [ webgpuInput ]
+			} );
+
+		}
+
+	};
+
+}
+
 /**
  * @type {Array<import('rollup').RollupOptions>}
  */
@@ -70,6 +93,7 @@ const builds = [
 		},
 		plugins: [
 			glsl(),
+			webglBackend( 'three.webgpu.nodes.webgl.js', 'src/Three.WebGPU.Nodes.js' ),
 			header()
 		],
 		preserveEntrySignatures: 'allow-extension',
@@ -91,6 +115,7 @@ const builds = [
 		},
 		plugins: [
 			glsl(),
+			webglBackend( 'three.webgpu.webgl.js', 'src/Three.WebGPU.js' ),
 			header()
 		],
 		preserveEntrySignatures: 'allow-extension',

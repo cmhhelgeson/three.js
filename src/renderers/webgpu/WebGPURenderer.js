@@ -1,7 +1,8 @@
 import Renderer from '../common/Renderer.js';
-import WebGLBackend from '../webgl-fallback/WebGLBackend.js';
+import Backend from '../common/Backend.js';
 import WebGPUBackend from './WebGPUBackend.js';
 import StandardNodeLibrary from './nodes/StandardNodeLibrary.js';
+import { loadWebGLBackend } from '../webgl-fallback/loadWebGLBackend.js';
 import { warn } from '../../utils.js';
 /*
 const debugHandler = {
@@ -39,6 +40,7 @@ class WebGPURenderer extends Renderer {
 	 * @property {boolean} [antialias=false] - Whether MSAA as the default anti-aliasing should be enabled or not.
 	 * @property {number} [samples=0] - When `antialias` is `true`, `4` samples are used by default. Set this parameter to any other integer value than 0 to overwrite the default.
 	 * @property {boolean} [forceWebGL=false] - If set to `true`, the renderer uses a WebGL 2 backend no matter if WebGPU is supported or not.
+	 * The WebGL 2 backend is loaded on demand when the renderer is initialized, so `renderer.backend` is only the WebGL 2 backend after {@link Renderer#init}.
 	 * @property {boolean} [multiview=false] - If set to `true`, the renderer will use multiview during WebXR rendering if supported.
 	 * @property {number} [outputType=undefined] - Texture type for output to canvas. By default, device's preferred format is used; other formats may incur overhead.
 	 * @property {number} [outputBufferType=HalfFloatType] - Defines the type of output buffers. The default `HalfFloatType` is recommend for best
@@ -52,30 +54,29 @@ class WebGPURenderer extends Renderer {
 	 */
 	constructor( parameters = {} ) {
 
-		let BackendClass;
+		// the WebGL 2 backend is imported on demand, so builds which only run WebGPU don't load it.
+		// when it is forced, a generic backend stands in until init() replaces it
+
+		const backend = parameters.forceWebGL ? new Backend( parameters ) : new WebGPUBackend( parameters );
+
+		//super( new Proxy( backend, debugHandler ) );
+		super( backend, parameters );
 
 		if ( parameters.forceWebGL ) {
 
-			BackendClass = WebGLBackend;
+			this._getBackend = () => this._createWebGLBackend();
 
 		} else {
 
-			BackendClass = WebGPUBackend;
-
-			parameters.getFallback = () => {
+			this._getFallback = () => {
 
 				warn( 'WebGPURenderer: WebGPU is not available, running under WebGL2 backend.' );
 
-				return new WebGLBackend( parameters );
+				return this._createWebGLBackend();
 
 			};
 
 		}
-
-		const backend = new BackendClass( parameters );
-
-		//super( new Proxy( backend, debugHandler ) );
-		super( backend, parameters );
 
 		/**
 		 * The generic default value is overwritten with the
@@ -99,6 +100,21 @@ class WebGPURenderer extends Renderer {
 			__THREE_DEVTOOLS__.dispatchEvent( new CustomEvent( 'observe', { detail: this } ) );
 
 		}
+
+	}
+
+	/**
+	 * Creates the WebGL 2 backend. Its module is imported on first use, so it's only
+	 * downloaded when WebGL 2 is forced or WebGPU is not available.
+	 *
+	 * @private
+	 * @return {Promise<Backend>} A Promise that resolves with the WebGL 2 backend.
+	 */
+	async _createWebGLBackend() {
+
+		const { WebGLBackend } = await loadWebGLBackend();
+
+		return new WebGLBackend( this.backend.parameters );
 
 	}
 

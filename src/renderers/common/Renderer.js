@@ -140,7 +140,10 @@ class Renderer {
 	 * @property {boolean} [antialias=false] - Whether MSAA as the default anti-aliasing should be enabled or not.
 	 * @property {number} [samples=0] - When `antialias` is `true`, `4` samples are used by default. This parameter can set to any other integer value than 0
 	 * to overwrite the default.
+	 * @property {?Function} [getBackend=null] - This callback function can be used to load the backend asynchronously when the renderer is initialized.
+	 * It returns the backend or a promise resolving to it. The backend passed to the constructor is then only used until {@link Renderer#init} replaces it.
 	 * @property {?Function} [getFallback=null] - This callback function can be used to provide a fallback backend, if the primary backend can't be targeted.
+	 * It returns the backend or a promise resolving to it.
 	 * @property {number} [outputBufferType=HalfFloatType] - Defines the type of output buffers. The default `HalfFloatType` is recommend for best
 	 * quality. To save memory and bandwidth, `UnsignedByteType` might be used. This will reduce rendering quality though.
 	 * @property {boolean} [multiview=false] - If set to `true`, the renderer will use multiview during WebXR rendering if supported.
@@ -174,6 +177,7 @@ class Renderer {
 			stencil = false,
 			antialias = false,
 			samples = 0,
+			getBackend = null,
 			getFallback = null,
 			outputBufferType = HalfFloatType,
 			multiview = false
@@ -402,6 +406,14 @@ class Renderer {
 		 * @type {?Function}
 		 */
 		this._getFallback = getFallback;
+
+		/**
+		 * This callback function can be used to load the backend asynchronously when the renderer is initialized.
+		 *
+		 * @private
+		 * @type {?Function}
+		 */
+		this._getBackend = getBackend;
 
 		/**
 		 * A reference to a renderer module for managing shader attributes.
@@ -910,6 +922,12 @@ class Renderer {
 
 			try {
 
+				if ( this._getBackend !== null ) {
+
+					this.backend = backend = await this._getBackend();
+
+				}
+
 				await backend.init( this );
 
 			} catch ( error ) {
@@ -920,7 +938,7 @@ class Renderer {
 
 					try {
 
-						this.backend = backend = this._getFallback( error );
+						this.backend = backend = await this._getFallback( error );
 						await backend.init( this );
 
 					} catch ( error ) {

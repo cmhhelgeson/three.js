@@ -18,7 +18,7 @@ function filesize() {
 
 					const size = ( chunk.code.length / 1024 ).toFixed( 2 ) + ' KB';
 					const gzipped = ( gzipSync( chunk.code ).length / 1024 ).toFixed( 2 ) + ' KB';
-					const destination = options.file;
+					const destination = options.file || `${ options.dir }/${ chunk.fileName }`;
 
 					const lines = [
 						{ label: 'Destination: ', value: destination },
@@ -49,6 +49,20 @@ function filesize() {
 
 }
 
+// WebGPURenderer imports its WebGL 2 backend on demand, so the WebGPU builds have a second chunk.
+// the entry keeps its file name and the backend is written next to it
+
+function webgpuOutput( fileName ) {
+
+	return {
+		format: 'esm',
+		dir: 'test/treeshake',
+		entryFileNames: fileName,
+		chunkFileNames: fileName.replace( '.bundle', '.webgl.bundle' )
+	};
+
+}
+
 export default [
 	{
 		input: 'src/Three.js',
@@ -66,30 +80,26 @@ export default [
 	},
 	{
 		input: 'src/Three.WebGPU.js',
+		preserveEntrySignatures: 'allow-extension',
 		plugins: [
 			resolve(),
 			terser(),
 			filesize()
 		],
 		output: [
-			{
-				format: 'esm',
-				file: 'test/treeshake/three.webgpu.bundle.min.js'
-			}
+			webgpuOutput( 'three.webgpu.bundle.min.js' )
 		]
 	},
 	{
 		input: 'src/Three.WebGPU.Nodes.js',
+		preserveEntrySignatures: 'allow-extension',
 		plugins: [
 			resolve(),
 			terser(),
 			filesize()
 		],
 		output: [
-			{
-				format: 'esm',
-				file: 'test/treeshake/three.webgpu.nodes.bundle.min.js'
-			}
+			webgpuOutput( 'three.webgpu.nodes.bundle.min.js' )
 		]
 	},
 	{
@@ -124,10 +134,7 @@ export default [
 			resolve()
 		],
 		output: [
-			{
-				format: 'esm',
-				file: 'test/treeshake/index.webgpu.bundle.js'
-			}
+			webgpuOutput( 'index.webgpu.bundle.js' )
 		]
 	},
 	{
@@ -138,10 +145,7 @@ export default [
 			filesize()
 		],
 		output: [
-			{
-				format: 'esm',
-				file: 'test/treeshake/index.webgpu.bundle.min.js'
-			}
+			webgpuOutput( 'index.webgpu.bundle.min.js' )
 		]
 	},
 	{
@@ -150,10 +154,7 @@ export default [
 			resolve()
 		],
 		output: [
-			{
-				format: 'esm',
-				file: 'test/treeshake/index.webgpu.nodes.bundle.js'
-			}
+			webgpuOutput( 'index.webgpu.nodes.bundle.js' )
 		]
 	},
 	{
@@ -164,10 +165,7 @@ export default [
 			filesize()
 		],
 		output: [
-			{
-				format: 'esm',
-				file: 'test/treeshake/index.webgpu.nodes.bundle.min.js'
-			}
+			webgpuOutput( 'index.webgpu.nodes.bundle.min.js' )
 		]
 	},
 	{
@@ -176,10 +174,7 @@ export default [
 			resolve()
 		],
 		output: [
-			{
-				format: 'esm',
-				file: 'test/treeshake/index.webgpu.tsl.bundle.js'
-			}
+			webgpuOutput( 'index.webgpu.tsl.bundle.js' )
 		]
 	},
 	{
@@ -190,10 +185,7 @@ export default [
 			filesize()
 		],
 		output: [
-			{
-				format: 'esm',
-				file: 'test/treeshake/index.webgpu.tsl.bundle.min.js'
-			}
+			webgpuOutput( 'index.webgpu.tsl.bundle.min.js' )
 		]
 	}
 ];
